@@ -1,0 +1,36 @@
+{
+  "name": "screenai",
+  "productName": "ScreenAI",
+  "version": "1.0.0",
+  "description": "ScreenAI — AI-powered screen analysis desktop assistant using Electron and Google Gemini Vision",
+  "main": "main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "create-icon": "node scripts/create-icon.js",
+    "prebuild:win": "node scripts/create-icon.js",
+    "prebuild:mac": "node scripts/create-icon.js",
+    "prebuild": "node scripts/create-icon.js",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build": "electron-builder --win --mac"
+  },
+  "dependencies": {
+    "jimp": "0.22.12",
+    "node-fetch": "2.7.0",
+    "screenshot-desktop": "1.15.0"
+  },
+  "devDependencies": {
+    "electron": "^29.4.6",
+    "electron-builder": "^24.13.3"
+  },
+  "author": {
+    "name": "Mohammed Jaseel Kunnathodika",
+    "url": "https://www.linkedin.com/in/jaseelkt/"
+  },
+  "homepage": "https://www.linkedin.com/in/jaseelkt/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jaseelkt/screenai"
+  },
+  "license": "UNLICENSED"
+}

@@ -1,0 +1,41 @@
+{
+  "appId": "com.screenai.assistant",
+  "productName": "ScreenAI",
+  "copyright": "© 2026 Jaseel",
+  "directories": {
+    "output": "dist",
+    "buildResources": "assets"
+  },
+  "files": [
+    "main/**/*",
+    "renderer/**/*",
+    "preload/**/*",
+    "assets/**/*",
+    "node_modules/**/*",
+    "package.json"
+  ],
+  "win": {
+    "target": [
+      { "target": "nsis", "arch": ["x64"] }
+    ],
+    "icon": "assets/icons/icon.png",
+    "publisherName": "ScreenAI"
+  },
+  "mac": {
+    "target": [
+      { "target": "dmg", "arch": ["x64", "arm64"] }
+    ],
+    "icon": "assets/icons/icon.png",
+    "category": "public.app-category.utilities",
+    "extendInfo": {
+      "NSScreenCaptureUsageDescription": "Screen AI Assistant needs screen recording permission to capture selected screen regions for AI analysis."
+    }
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "runAfterFinish": true
+  }
+}

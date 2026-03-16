@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+  <title>Select Region</title>
+  <link rel="stylesheet" href="capture.css" />
+</head>
+<body>
+  <!--
+    This window acts like the Windows Snipping Tool:
+    - A fullscreen transparent canvas sits on top of the screenshot.
+    - A semi-transparent dark overlay dims the whole screen.
+    - The user's drag selection punches a "clear" hole in the overlay,
+      revealing the original screenshot underneath.
+    - On mouseup, the coordinates are sent to main and this window closes.
+  -->
+  <canvas id="selection-canvas"></canvas>
+
+  <div id="hint-bar">
+    <span>Drag to select a region</span>
+    <span class="separator">·</span>
+    <span>Press <kbd>Esc</kbd> to cancel</span>
+  </div>
+
+  <script src="capture.js"></script>
+</body>
+</html>

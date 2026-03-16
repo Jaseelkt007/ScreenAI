@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';" />
+  <title>Screen AI Assistant — Settings</title>
+  <link rel="stylesheet" href="settings.css" />
+</head>
+<body>
+  <div id="app">
+
+    <div id="header">
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="11" cy="11" r="10" stroke="#00d4ff" stroke-width="1.5"/>
+        <path d="M7 11h8M11 7v8" stroke="#00d4ff" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      <h1>Screen AI Assistant</h1>
+    </div>
+
+    <!-- First-run welcome message (hidden after setup) -->
+    <div id="welcome" class="section">
+      <p>Welcome! Enter your <strong>Gemini API key</strong> to get started.</p>
+      <p class="hint">
+        Get a free key at
+        <span class="link" id="api-link">aistudio.google.com/app/apikey</span>
+      </p>
+    </div>
+
+    <div class="section">
+      <label for="api-key-input">Gemini API Key</label>
+      <div id="key-row">
+        <input
+          type="password"
+          id="api-key-input"
+          placeholder="AIza..."
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button id="toggle-visibility" title="Show / hide key">
+          <svg id="eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+               xmlns="http://www.w3.org/2000/svg">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"
+                  stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <circle cx="12" cy="12" r="3"
+                    stroke="currentColor" stroke-width="1.8"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="section">
+      <label for="model-input">Gemini Model</label>
+      <input
+        type="text"
+        id="model-input"
+        placeholder="gemini-2.5-flash"
+        spellcheck="false"
+      />
+      <p class="hint">Default: gemini-2.5-flash &nbsp;·&nbsp; Fallback: gemini-1.5-flash</p>
+    </div>
+
+    <div class="section">
+      <label class="checkbox-label">
+        <input type="checkbox" id="startup-checkbox" />
+        <span class="checkbox-custom"></span>
+        Start with Windows automatically
+      </label>
+    </div>
+
+    <div class="section">
+      <label class="checkbox-label">
+        <input type="checkbox" id="hotkey-info" disabled checked />
+        <span class="checkbox-custom"></span>
+        Global hotkeys: <strong>F7</strong> &nbsp;/&nbsp; <strong>Ctrl+Shift+Y</strong>
+      </label>
+    </div>
+
+    <div id="status-bar" class="hidden"></div>
+
+    <div id="button-row">
+      <button id="cancel-btn">Cancel</button>
+      <button id="save-btn" class="primary">Save &amp; Close</button>
+    </div>
+
+  </div>
+
+  <script src="settings.js"></script>
+</body>
+</html>

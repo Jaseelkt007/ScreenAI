@@ -1,0 +1,7 @@
+# Place your icon files here:
+#
+#   icon.ico   — Windows (multi-resolution, 256×256 recommended)
+#   icon.icns  — macOS   (use iconutil on macOS to generate from PNGs)
+#   icon.png   — Source PNG (1024×1024 recommended)
+#
+# See docs/packaging.md for step-by-step icon generation instructions.
