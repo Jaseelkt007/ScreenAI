@@ -32,3 +32,6 @@ desktop.ini
 # electron-builder cache
 .cache/
 buildResources/
+
+# Duplicate/backup icon files (source icon should be icon.png)
+icon (*).png

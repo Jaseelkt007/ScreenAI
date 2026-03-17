@@ -49,7 +49,9 @@ function getSetting(key, fallback) {
 function getDefaults() {
   return {
     geminiApiKey: '',
-    geminiModel:  'gemini-2.5-flash',
+    openaiApiKey: '',
+    geminiModel:  'gemini-3-flash-preview',
+    customHotkey: '',
     startWithOS:  true,   // Enable startup by default after install
     firstRun:     true,
   };
@@ -76,14 +78,19 @@ function isFirstRun() {
   return getSetting('firstRun', true);
 }
 
-/** Get the effective API key (settings file takes priority over .env). */
+/** Get the effective Gemini API key (settings file takes priority over .env). */
 function getApiKey() {
   return getSetting('geminiApiKey', '') || process.env.GEMINI_API_KEY || '';
 }
 
-/** Get the effective model name. */
-function getModel() {
-  return getSetting('geminiModel', '') || process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+/** Get the effective OpenAI API key. */
+function getOpenAIKey() {
+  return getSetting('openaiApiKey', '') || process.env.OPENAI_API_KEY || '';
 }
 
-module.exports = { loadSettings, saveSettings, getSetting, isFirstRun, getApiKey, getModel };
+/** Get the effective model name. */
+function getModel() {
+  return getSetting('geminiModel', '') || process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
+}
+
+module.exports = { loadSettings, saveSettings, getSetting, isFirstRun, getApiKey, getOpenAIKey, getModel };

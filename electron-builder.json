@@ -1,7 +1,7 @@
 {
   "appId": "com.screenai.assistant",
   "productName": "ScreenAI",
-  "copyright": "© 2026 Jaseel",
+  "copyright": "© 2026 Mohammed Jaseel Kunnathodika",
   "directories": {
     "output": "dist",
     "buildResources": "assets"
@@ -19,7 +19,8 @@
       { "target": "nsis", "arch": ["x64"] }
     ],
     "icon": "assets/icons/icon.png",
-    "publisherName": "ScreenAI"
+    "publisherName": "ScreenAI",
+    "sign": null
   },
   "mac": {
     "target": [

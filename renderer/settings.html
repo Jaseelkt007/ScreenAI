@@ -27,6 +27,7 @@
       </p>
     </div>
 
+    <!-- Gemini API Key -->
     <div class="section">
       <label for="api-key-input">Gemini API Key</label>
       <div id="key-row">
@@ -38,28 +39,58 @@
           spellcheck="false"
         />
         <button id="toggle-visibility" title="Show / hide key">
-          <svg id="eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
-               xmlns="http://www.w3.org/2000/svg">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"
                   stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-            <circle cx="12" cy="12" r="3"
-                    stroke="currentColor" stroke-width="1.8"/>
+            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>
           </svg>
         </button>
       </div>
     </div>
 
+    <!-- AI Model dropdown -->
     <div class="section">
-      <label for="model-input">Gemini Model</label>
-      <input
-        type="text"
-        id="model-input"
-        placeholder="gemini-2.5-flash"
-        spellcheck="false"
-      />
-      <p class="hint">Default: gemini-2.5-flash &nbsp;·&nbsp; Fallback: gemini-1.5-flash</p>
+      <label for="model-select">AI Model</label>
+      <select id="model-select">
+        <optgroup label="Gemini Models">
+          <option value="gemini-3-flash-preview">Gemini 3 Flash Preview (Default)</option>
+          <option value="gemini-3-flash-preview">Gemini 2.5 Flash</option>
+        </optgroup>
+        <optgroup label="OpenAI Models (requires OpenAI key below)">
+          <option value="gpt-4o">GPT-4o</option>
+          <option value="gpt-4o-mini">GPT-4o Mini</option>
+          <option value="o1">o1</option>
+          <option value="o3-mini">o3 Mini</option>
+        </optgroup>
+      </select>
     </div>
 
+    <!-- OpenAI API Key (shown only when an OpenAI model is selected) -->
+    <div class="section hidden" id="openai-key-section">
+      <label for="openai-key-input">OpenAI API Key</label>
+      <div id="openai-key-row">
+        <input
+          type="password"
+          id="openai-key-input"
+          placeholder="sk-..."
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button id="toggle-openai-visibility" title="Show / hide OpenAI key">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"
+                  stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>
+          </svg>
+        </button>
+      </div>
+      <p class="hint">
+        Get a key at
+        <span class="link" id="openai-link">platform.openai.com/api-keys</span>
+      </p>
+    </div>
+
+    <!-- Start with Windows -->
     <div class="section">
       <label class="checkbox-label">
         <input type="checkbox" id="startup-checkbox" />
@@ -68,12 +99,15 @@
       </label>
     </div>
 
+    <!-- Global Hotkey -->
     <div class="section">
-      <label class="checkbox-label">
-        <input type="checkbox" id="hotkey-info" disabled checked />
-        <span class="checkbox-custom"></span>
-        Global hotkeys: <strong>F7</strong> &nbsp;/&nbsp; <strong>Ctrl+Shift+Y</strong>
-      </label>
+      <label>Global Hotkey</label>
+      <div id="hotkey-row">
+        <div id="hotkey-display">F7</div>
+        <button id="record-hotkey-btn" class="small-btn">Change</button>
+        <button id="reset-hotkey-btn" class="small-btn">Reset</button>
+      </div>
+      <p class="hint" id="hotkey-hint">Click "Change" then press your desired key combination</p>
     </div>
 
     <div id="status-bar" class="hidden"></div>

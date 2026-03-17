@@ -1,216 +1,253 @@
-# Screen AI Assistant
+# ScreenAI
 
-A cross-platform desktop AI assistant that lives invisibly in the background. Press a global hotkey, select a screen region, ask a question, and get an instant AI answer — all without leaving your workflow.
+> Capture any part of your screen, ask an AI about it — instantly, without leaving your workflow.
 
-Built with **Electron**, **Node.js**, and **Google Gemini Vision**.
+ScreenAI is a lightweight desktop assistant that lives silently in your system tray. Press a global hotkey, drag to select a screen region, type your question, and get a streaming AI response right next to your selection.
 
----
-
-## Features (Phase 1 MVP)
-
-- **Invisible background app** — no Dock icon, no taskbar icon
-- **Global hotkey** — triggers from any app, any time
-- **Snipping-tool-style selection** — drag to capture any screen region
-- **Translucent overlay panel** — minimal dark UI appears next to your selection
-- **Gemini Vision** — sends screenshot + question to Google's multimodal LLM
-- **Cross-platform** — Windows 10/11 and macOS 12+
+**[Download for Windows](https://screen-ai-flame.vercel.app/)** · Built with Electron + Google Gemini Vision + OpenAI
 
 ---
 
-## Hotkey
+## Features
 
-| Platform | Shortcut |
+- **Global hotkey** — trigger from any app at any time (`F7` or `Ctrl+Shift+Y` on Windows)
+- **Snipping-tool-style capture** — drag to select any region of your screen
+- **Streaming AI responses** — answers appear word-by-word as they generate
+- **Multi-turn conversation** — ask follow-up questions about the same screenshot (3 turns)
+- **Gemini + OpenAI support** — use Gemini 3 Flash, GPT-4o, o1, o3-mini, and more
+- **Light / dark theme** — toggle inside the overlay panel
+- **System tray** — always accessible, zero taskbar clutter
+- **Start with OS** — optionally launch at login
+- **Custom hotkey** — rebind to any key combo you prefer
+- **HiDPI aware** — correct pixel coordinates on high-DPI / Retina displays
+
+---
+
+## Demo
+
+```
+Press F7  →  Screen dims, drag a region
+           →  Overlay panel appears beside your selection
+           →  Type: "What does this error mean?"
+           →  AI answer streams in
+           →  Ask follow-ups, or press Esc to close
+```
+
+---
+
+## Hotkeys
+
+| Platform | Default Shortcuts |
 |---|---|
-| Windows | `Ctrl + Shift + Y` |
-| macOS   | `Shift + ⌘ + Y`   |
+| Windows | `F7` · `Ctrl+Shift+Y` · `Alt+Shift+Y` |
+| macOS   | `Shift+Cmd+Y` |
 
-Press the hotkey again to dismiss any open window.
-
----
-
-## Project structure
-
-```
-screen-ai-assistant/
-│
-├── main/
-│   ├── main.js          ← App entry point, window orchestration, IPC
-│   ├── hotkey.js        ← Global shortcut registration
-│   ├── screenshot.js    ← Full-screen capture + jimp region crop
-│   ├── llm.js           ← Gemini Vision API integration
-│   └── config.js        ← Environment variable / .env loader
-│
-├── renderer/
-│   ├── capture.html     ← Snipping-tool selection window
-│   ├── capture.js       ← Canvas drag-to-select logic
-│   ├── capture.css
-│   ├── overlay.html     ← Ask/answer overlay panel
-│   ├── overlay.js       ← Question input + response rendering
-│   └── overlay.css
-│
-├── preload/
-│   └── preload.js       ← Secure contextBridge IPC surface
-│
-├── assets/
-│   └── icons/           ← icon.ico (Win) + icon.icns (Mac)
-│
-├── docs/                ← Architecture & skill documentation
-│   ├── architecture.md
-│   ├── electron-basics.md
-│   ├── global-hotkeys.md
-│   ├── transparent-overlay.md
-│   ├── screen-capture.md
-│   ├── llm-integration.md
-│   ├── security.md
-│   ├── packaging.md
-│   └── cross-platform-build.md
-│
-├── package.json
-├── electron-builder.json
-└── .env.example
-```
+Press the hotkey again while the overlay is open to close it.
+Rebind anytime via the tray icon → **Settings**.
 
 ---
 
-## Prerequisites
+## Getting Started
+
+### Prerequisites
 
 - **Node.js** 18 or later — [nodejs.org](https://nodejs.org)
-- **npm** 9 or later (bundled with Node.js)
-- A **Gemini API key** — [Get one free at Google AI Studio](https://aistudio.google.com/app/apikey)
+- A **Gemini API key** (free) — [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+- *(Optional)* An **OpenAI API key** if you want to use GPT-4o / o1 — [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
 
----
-
-## Installation
+### Install & run
 
 ```bash
-# 1. Clone or download the project
-git clone <your-repo-url> screen-ai-assistant
-cd screen-ai-assistant
+# 1. Clone the repo
+git clone https://github.com/jaseelkt/screenai.git
+cd screenai
 
 # 2. Install dependencies
 npm install
 
-# 3. Configure your API key
+# 3. (Optional) Set API key via .env for local dev
 cp .env.example .env
-# Open .env in any editor and set GEMINI_API_KEY=your_key_here
-```
+# Edit .env and add your GEMINI_API_KEY
 
----
-
-## Running in development
-
-```bash
+# 4. Run
 npm start
 ```
 
-The app launches silently — no window appears. Look for a console message:
+The app starts silently in the system tray. On first launch with no API key configured, the Settings window opens automatically.
 
-```
-[App] Screen AI Assistant is running in the background.
-[App] Press the global hotkey to start a screen query.
-```
-
-Now press the hotkey:
-- **Windows**: `Shift + Win + Y`
-- **macOS**: `Shift + ⌘ + Y`
-
----
-
-## Usage
-
-1. Press the hotkey — the screen dims with a crosshair cursor.
-2. **Click and drag** to select the region you want to ask about.
-3. An overlay panel appears next to your selection.
-4. Type your question in the text box.
-5. Press **Enter** (or click the arrow button) to send.
-6. The AI response appears in the panel.
-7. Ask follow-up questions, or press **Esc** to close.
-
----
-
-## Building for distribution
-
-### Windows installer (`.exe`)
-
-```bash
-# Run on Windows
-npm run build:win
-# Output: dist/Screen AI Assistant Setup 1.0.0.exe
-```
-
-### macOS DMG (`.dmg`)
-
-```bash
-# Run on macOS
-npm run build:mac
-# Output: dist/Screen AI Assistant-1.0.0.dmg
-```
-
-> See `docs/packaging.md` for icon generation and code signing instructions.
-
----
-
-## macOS: Screen Recording permission
-
-On macOS 10.15+, the app needs **Screen Recording** permission to capture the screen.
-
-On first use, macOS will show a permission dialog. If you accidentally denied it:
-
-1. Open **System Settings** → **Privacy & Security** → **Screen Recording**
-2. Enable **Screen AI Assistant**
-3. Restart the app
+> You can also enter your API key through the UI: right-click the tray icon → **Settings / API Key**.
 
 ---
 
 ## Configuration
 
-All configuration is via environment variables. Copy `.env.example` to `.env`:
+### Option A — Settings UI (recommended)
+
+Right-click the tray icon → **Settings / API Key** and enter your key. Settings are saved to your OS user-data directory and persist across updates.
+
+### Option B — `.env` file (dev / CI)
+
+Copy `.env.example` to `.env` in the project root:
 
 ```env
 GEMINI_API_KEY=your_gemini_api_key_here
+```
 
-# Optional: override the model (default: gemini-2.0-flash)
-# GEMINI_MODEL=gemini-2.0-flash
+The settings file takes priority over `.env`. Environment variables are a fallback for automation and local development.
+
+---
+
+## Supported Models
+
+| Model | Provider | Notes |
+|---|---|---|
+| `gemini-3-flash-preview` | Google Gemini | Default — fast, multimodal |
+| `gemini-2.5-flash` | Google Gemini | Requires Gemini API key |
+| `gpt-4o` | OpenAI | Requires OpenAI API key |
+| `gpt-4o-mini` | OpenAI | Requires OpenAI API key |
+| `o1` | OpenAI | Requires OpenAI API key |
+| `o3-mini` | OpenAI | Requires OpenAI API key |
+
+Switch models anytime in **Settings**.
+
+---
+
+## Building from Source
+
+### Windows installer (`.exe`)
+
+```bash
+# Must run on Windows
+npm run build:win
+# Output → dist/ScreenAI Setup 1.0.0.exe
+```
+
+### macOS DMG (`.dmg`)
+
+```bash
+# Must run on macOS
+npm run build:mac
+# Output → dist/ScreenAI-1.0.0.dmg
+```
+
+### Regenerate app icon
+
+The build scripts call this automatically. To run manually:
+
+```bash
+npm run create-icon
+```
+
+This reads `icon.png` from the project root and writes a 512×512 version to `assets/icons/icon.png`.
+
+---
+
+## macOS: Screen Recording Permission
+
+On macOS 10.15+, the OS requires explicit permission for screen capture.
+
+On first use a permission dialog will appear. If you accidentally denied it:
+
+1. Open **System Settings** → **Privacy & Security** → **Screen Recording**
+2. Enable **ScreenAI**
+3. Restart the app
+
+---
+
+## Project Structure
+
+```
+screenai/
+├── main/
+│   ├── main.js          # App entry point, window management, IPC routing
+│   ├── hotkey.js        # Global shortcuts + system tray icon
+│   ├── screenshot.js    # Full-screen capture and jimp region crop
+│   ├── llm.js           # Gemini + OpenAI streaming API integration
+│   ├── settings.js      # Read/write settings.json in OS userData dir
+│   └── config.js        # .env loader
+│
+├── renderer/
+│   ├── capture.html/js/css   # Snipping-tool selection window
+│   ├── overlay.html/js/css   # Ask/answer overlay panel
+│   └── settings.html/js/css  # Settings window
+│
+├── preload/
+│   └── preload.js       # Secure contextBridge IPC surface
+│
+├── assets/
+│   └── icons/           # App icon (generated by create-icon.js)
+│
+├── scripts/
+│   └── create-icon.js   # Resizes icon.png → assets/icons/icon.png
+│
+├── docs/                # Architecture and implementation notes
+├── .env.example         # Template for local API key configuration
+├── electron-builder.json
+└── package.json
 ```
 
 ---
 
-## Documentation
+## Architecture
 
-Detailed skill and architecture documentation lives in `docs/`:
+All OS-level work (hotkeys, file I/O, HTTP) runs in the **main process**. Renderer pages are locked down (`contextIsolation: true`, `nodeIntegration: false`) and communicate only through named IPC channels exposed by `preload/preload.js` via `contextBridge`.
 
-| File | Contents |
+```
+Hotkey / tray click
+  → screenshot.js captures full screen (PNG buffer)
+  → Capture window  — user drags a region
+  → IPC: capture:region-selected → main crops with jimp (×scaleFactor for HiDPI)
+  → Overlay window  — user types question, response streams in
+  → IPC: overlay:ask → llm.js → Gemini or OpenAI streaming API
+```
+
+A 1×1 hidden **background window** keeps the Win32 message pump alive so global hotkeys continue working even when no visible window is open.
+
+---
+
+## Settings Storage
+
+| Platform | Path |
 |---|---|
-| `architecture.md` | Full system diagram, IPC channels, data flow |
-| `electron-basics.md` | Electron process model, BrowserWindow, IPC patterns |
-| `global-hotkeys.md` | globalShortcut API, platform keys, lifecycle |
-| `transparent-overlay.md` | Frameless/transparent windows, CSS techniques |
-| `screen-capture.md` | screenshot-desktop, DPI scaling, jimp cropping |
-| `llm-integration.md` | Gemini API, request format, error handling |
-| `security.md` | contextIsolation, IPC hardening, API key safety |
-| `packaging.md` | electron-builder, icons, notarisation |
-| `cross-platform-build.md` | Windows vs macOS differences, CI setup |
+| Windows | `%APPDATA%\screen-ai-assistant\settings.json` |
+| macOS   | `~/Library/Application Support/screen-ai-assistant/settings.json` |
+
+API keys are stored only on your local machine and are never transmitted anywhere except directly to the respective AI provider API.
 
 ---
 
-## Roadmap (future phases)
-
-- [ ] System tray icon with settings menu
-- [ ] API key entry UI (no manual `.env` editing)
-- [ ] Continuous screen monitoring mode
-- [ ] Voice input
-- [ ] Autonomous agent loop (Phase 3+)
-- [ ] Multi-monitor support
-- [ ] Auto-update
-
----
-
-## Tech stack
+## Tech Stack
 
 | Package | Version | Purpose |
 |---|---|---|
 | `electron` | ^29 | Desktop app framework |
 | `electron-builder` | ^24 | Cross-platform packaging |
 | `screenshot-desktop` | ^1.15 | Full-screen capture |
-| `jimp` | 0.22.12 | Image cropping (pure JS) |
-| `node-fetch` | 2.7.0 | HTTP client for Gemini API |
+| `jimp` | 0.22.12 | Image cropping (pure JS, no native deps) |
+| `node-fetch` | 2.7.0 | HTTP client for Gemini and OpenAI APIs |
+
+---
+
+## Contributing
+
+Contributions are welcome. To get started:
+
+1. Fork the repo and create a feature branch
+2. `npm install` and `npm start` to run locally
+3. Make your changes
+4. Open a pull request with a clear description of what you changed and why
+
+Please keep PRs focused — one feature or fix per PR.
+
+---
+
+## License
+
+[MIT](./LICENSE) — © 2026 Mohammed Jaseel Kunnathodika
+
+---
+
+## Author
+
+**Mohammed Jaseel Kunnathodika**
+[linkedin.com/in/jaseelkt](https://www.linkedin.com/in/jaseelkt/)

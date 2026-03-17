@@ -201,3 +201,104 @@ button.primary {
 button.primary:hover { opacity: 0.88; }
 
 .hidden { display: none !important; }
+
+/* Select / dropdown */
+select {
+  width: 100%;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  color: #e0e0e0;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 9px 12px;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='rgba(255,255,255,0.35)' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+select:focus {
+  border-color: rgba(0,212,255,0.5);
+  background-color: rgba(255,255,255,0.08);
+}
+
+select option, select optgroup {
+  background: #1e1e2e;
+  color: #e0e0e0;
+}
+
+/* OpenAI key row */
+#openai-key-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+#openai-key-row input { flex: 1; }
+
+#toggle-openai-visibility {
+  flex-shrink: 0;
+  width: 36px; height: 36px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  color: rgba(255,255,255,0.4);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+#toggle-openai-visibility:hover { background: rgba(255,255,255,0.1); color: #e0e0e0; }
+
+/* Hotkey row */
+#hotkey-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+#hotkey-display {
+  flex: 1;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  color: #e0e0e0;
+  font-family: 'Consolas', 'SF Mono', monospace;
+  font-size: 13px;
+  padding: 8px 12px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  transition: border-color 0.2s;
+}
+
+#hotkey-display.recording {
+  border-color: rgba(0,212,255,0.6);
+  color: #00d4ff;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+/* Small inline buttons */
+.small-btn {
+  padding: 7px 12px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.small-btn.accent {
+  background: linear-gradient(135deg, #9333ea, #c026d3);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+.small-btn.accent:hover { opacity: 0.88; }
+

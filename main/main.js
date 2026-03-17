@@ -31,15 +31,18 @@ const {
   screen,
   dialog,
   shell,
+  nativeImage,
 } = require('electron');
 const path = require('path');
 
-const { registerHotkeys, unregisterHotkeys } = require('./hotkey');
+const { registerHotkeys, reregisterHotkeys, unregisterHotkeys } = require('./hotkey');
 const { captureFullScreen, cropImage }        = require('./screenshot');
 const { streamLLM }                           = require('./llm');
 const settingsStore                           = require('./settings');
 
-const APP_ICON = path.join(__dirname, '../assets/icons/icon.png');
+const APP_ICON = nativeImage.createFromPath(
+  path.join(__dirname, '../assets/icons/icon.png')
+);
 
 // ─── Window references ─────────────────────────────────────────────────────
 let backgroundWindow = null;
@@ -137,7 +140,7 @@ function openSettingsWindow() {
 
   settingsWindow = new BrowserWindow({
     width:       440,
-    height:      480,
+    height:      720,
     resizable:   false,
     frame:       true,
     skipTaskbar: false,
@@ -163,8 +166,9 @@ ipcMain.handle('settings:get', () => settingsStore.loadSettings());
 ipcMain.handle('settings:save', (_event, partial) => {
   try {
     settingsStore.saveSettings(partial);
-    // Re-apply startup preference immediately.
     applyStartupSetting();
+    // Re-register hotkeys if the custom hotkey changed.
+    if ('customHotkey' in partial) reregisterHotkeys();
     console.log('[Settings] Saved:', JSON.stringify(partial));
     return { ok: true };
   } catch (err) {
@@ -178,6 +182,7 @@ ipcMain.on('settings:close', () => { if (settingsWindow) settingsWindow.close();
 
 // IPC: open URL in system browser
 ipcMain.on('open:external', (_e, url) => shell.openExternal(url));
+
 
 // ─── Phase 1: Capture window ──────────────────────────────────────────────
 
