@@ -243,7 +243,7 @@ Please keep PRs focused — one feature or fix per PR.
 
 ## License
 
-[MIT](./LICENSE) — © 2026 Mohammed Jaseel Kunnathodika
+[Apache 2.0](./LICENSE) — © 2026 Mohammed Jaseel Kunnathodika
 
 ---
 
