@@ -2,6 +2,14 @@
 
 > Capture any part of your screen, ask an AI about it — instantly, without leaving your workflow.
 
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey.svg)]()
+[![Electron](https://img.shields.io/badge/Electron-29-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Gemini](https://img.shields.io/badge/Google%20Gemini-Vision-8E75B2?logo=google&logoColor=white)](https://aistudio.google.com/)
+[![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o-412991?logo=openai&logoColor=white)](https://platform.openai.com/)
+[![Download](https://img.shields.io/badge/Download-Windows%20Installer-0078D4?logo=windows&logoColor=white)](https://screen-ai-flame.vercel.app/)
+
 ScreenAI is a lightweight desktop assistant that lives silently in your system tray. Press a global hotkey, drag to select a screen region, type your question, and get a streaming AI response right next to your selection.
 
 **[Download for Windows](https://screen-ai-flame.vercel.app/)** · Built with Electron + Google Gemini Vision + OpenAI
