@@ -1,313 +1,233 @@
 # ScreenAI
 
-> Capture any part of your screen, ask an AI about it — instantly, without leaving your workflow.
+> Open-source desktop assistant for understanding what is on your screen, without leaving your workflow.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-2.0.0-00d4ff.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey.svg)]()
 [![Electron](https://img.shields.io/badge/Electron-29-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Gemini](https://img.shields.io/badge/Google%20Gemini-Vision-8E75B2?logo=google&logoColor=white)](https://aistudio.google.com/)
-[![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o-412991?logo=openai&logoColor=white)](https://platform.openai.com/)
-[![Download](https://img.shields.io/badge/Download-Windows%20Installer-0078D4?logo=windows&logoColor=white)](https://github.com/Jaseelkt007/ScreenAI/releases/latest)
+[![Download](https://img.shields.io/badge/Download-Latest%20Release-0078D4?logo=github&logoColor=white)](https://github.com/Jaseelkt007/Screenai_electron/releases/latest)
 
-ScreenAI is a lightweight desktop assistant that lives silently in your system tray. Press a global hotkey, drag to select a screen region, type your question, and get a streaming AI response right next to your selection. Or trigger **Jarvis** — a hands-free voice guide that captures your screen, transcribes your spoken question, and speaks the answer back to you.
+ScreenAI is a tray-based desktop application that brings multimodal AI into everyday desktop work. Instead of copying screenshots into a browser and losing context, you trigger ScreenAI with a global hotkey, capture part of the screen, ask a question, and get a streamed answer beside the exact UI you are looking at.
 
-**[Download v2.0 for Windows](https://github.com/Jaseelkt007/ScreenAI/releases/latest)** · Built with Electron + Google Gemini + ElevenLabs
+The project also includes **Jarvis**, a hands-free voice mode that records your question, looks at the current screen, generates a short visual guide, and speaks the answer back to you.
 
----
+**[Download the latest Windows release](https://github.com/Jaseelkt007/Screenai_electron/releases/latest)** · **[Contributing](./CONTRIBUTING.md)** · **[Architecture Docs](./docs/architecture.md)**
 
-## What's New in v2.0
+## Why ScreenAI
 
-### Jarvis — Voice Guide
+Modern desktop work is full of moments where the answer depends on visual context:
 
-A full voice pipeline, hands-free:
+- You are staring at an error dialog and want a plain-English explanation
+- You need help navigating an unfamiliar settings page or dashboard
+- You want a quick summary of what is on screen without writing a long prompt
+- You want spoken guidance while your hands stay on the keyboard or mouse
 
-1. Press `F8` (or your custom Jarvis hotkey) → mic opens
-2. Speak your question
-3. Press `F8` again → ScreenAI transcribes, captures your screen, and asks the LLM
-4. The Guide window appears with step-by-step instructions and a screenshot highlight
-5. Jarvis **speaks** the answer aloud via ElevenLabs TTS
+ScreenAI is designed for those moments. It keeps capture, question, answer, and follow-up in one flow instead of pushing you into a separate tool.
 
-### Performance overhaul
+## What It Does
 
-| Optimization | Detail |
+| Capability | Description |
 |---|---|
-| **Parallel STT + Capture** | Transcription and screen capture now run simultaneously |
-| **JPEG compression** | Screenshot compressed PNG → JPEG before sending to LLM (~75% smaller) |
-| **TTS streaming** | Audio starts playing from the first chunk — no waiting for full synthesis |
-| **Gemini 2.5 Flash for voice** | Voice guide uses `gemini-2.5-flash` independently of the overlay model |
+| Region capture | Select any part of the screen with a snipping-tool-style interaction |
+| Streaming answers | Responses appear incrementally as the model generates them |
+| Follow-up context | Continue the conversation about the same screenshot |
+| Voice guidance | Ask spoken questions and receive spoken answers with visual steps |
+| Multiple providers | Use Gemini by default or switch to supported OpenAI models |
+| Global hotkeys | Launch capture or voice mode from anywhere |
+| Tray-first workflow | Stays out of the taskbar and remains available in the system tray |
+| HiDPI-aware capture | Correct coordinate handling on scaled and Retina displays |
+| Local settings | API keys and preferences are stored on the local machine |
 
-### Redesigned Settings UI
+## Two Interaction Modes
 
-- Cyberpunk HUD aesthetic — dot-grid background, cyan glows, animated scan line
-- **Jarvis hotkey** always visible and configurable (even when Jarvis is disabled)
-- Card-based layout with corner bracket decorations
-- Proper toggle switches replacing checkboxes
+### 1. Screenshot Q&A
 
----
+This is the core ScreenAI workflow:
 
-## Features
+1. Press the capture hotkey
+2. Drag to select a region of the screen
+3. Ask a question about what you selected
+4. Read a streamed answer directly in the overlay
+5. Ask follow-up questions without recapturing immediately
 
-- **Global hotkey** — trigger from any app at any time (`F7` or `Ctrl+Shift+Y` on Windows)
-- **Snipping-tool-style capture** — drag to select any region of your screen
-- **Streaming AI responses** — answers appear word-by-word as they generate
-- **Multi-turn conversation** — ask follow-up questions about the same screenshot (3 turns)
-- **Gemini + OpenAI support** — use Gemini 3 Flash, Gemini 2.5 Flash, GPT-4o, o1, o3-mini, and more
-- **Jarvis voice guide** — speak your question, hear the answer (ElevenLabs STT + TTS)
-- **Streaming TTS** — audio playback begins before synthesis completes
-- **System tray** — always accessible, zero taskbar clutter
-- **Start with OS** — optionally launch at login
-- **Custom hotkeys** — rebind both capture and Jarvis hotkeys
-- **HiDPI aware** — correct pixel coordinates on high-DPI / Retina displays
+Typical prompts:
 
----
+- `What does this error mean?`
+- `Summarize this screen`
+- `Which button should I click next?`
+- `Explain this settings panel`
 
-## Demo
+### 2. Jarvis Voice Guide
 
-**Screenshot mode:**
-```
-Press F7  →  Screen dims, drag a region
-           →  Overlay panel appears beside your selection
-           →  Type: "What does this error mean?"
-           →  AI answer streams in
-           →  Ask follow-ups, or press Esc to close
-```
+Jarvis is a voice-first assistant for screen-aware guidance:
 
-**Jarvis voice mode:**
-```
-Press F8  →  Mic opens, HUD appears
-           →  Speak: "Can you explain what's on my screen?"
-           →  Press F8 again to stop
-           →  STT + screen capture run in parallel
-           →  Guide window opens with steps + screenshot highlight
-           →  Jarvis speaks the answer (streaming audio)
-```
+1. Press the voice hotkey
+2. Speak your question
+3. Stop recording
+4. ScreenAI captures the current screen and transcribes your audio
+5. A guide window opens with concise steps and highlighted regions
+6. The spoken response is played back through ElevenLabs streaming TTS
 
----
+This mode is useful when you want instructions without switching attention away from the app you are using.
 
-## Hotkeys
+## How It Works
 
-| Function | Default | Configurable |
-|---|---|---|
-| Screen Capture | `F7` / `Ctrl+Shift+Y` | Yes — Settings |
-| Jarvis Voice Guide | `F8` | Yes — Settings |
+At a high level, ScreenAI combines three responsibilities:
 
-Press the hotkey again while active to stop/cancel. Rebind anytime via the tray icon → **Settings**.
+- **Desktop integration**: global hotkeys, tray behavior, screen capture, settings, and native windows
+- **Multimodal reasoning**: screenshot-plus-prompt requests routed to Gemini or OpenAI
+- **Voice pipeline**: speech-to-text, structured guidance, and streaming text-to-speech for Jarvis
 
----
+The Electron main process owns OS integration and provider API calls. Lightweight renderer windows handle the user interface for capture, overlay answers, settings, voice HUD, and the guide view. A secure preload bridge exposes only the IPC surface needed by those renderers.
+
+For implementation details, see [docs/architecture.md](./docs/architecture.md) and the other files in [docs/](./docs).
+
+## Requirements
+
+- Node.js 18 or later
+- A Gemini API key for Gemini-powered flows
+- An OpenAI API key if you want to use OpenAI models
+- An ElevenLabs API key if you want to enable Jarvis voice mode
 
 ## Getting Started
 
-### Prerequisites
-
-- **Node.js** 18 or later — [nodejs.org](https://nodejs.org)
-- A **Gemini API key** (free) — [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
-- *(Optional)* An **OpenAI API key** for GPT-4o / o1 — [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
-- *(Optional)* An **ElevenLabs API key** for Jarvis voice — [elevenlabs.io/app/settings/api-keys](https://elevenlabs.io/app/settings/api-keys)
-
-### Install & run
+### Run from source
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/jaseelkt/screenai.git
-cd screenai
-
-# 2. Install dependencies
+git clone https://github.com/Jaseelkt007/Screenai_electron.git
+cd Screenai_electron
 npm install
-
-# 3. (Optional) Set API key via .env for local dev
-cp .env.example .env
-# Edit .env and add your GEMINI_API_KEY
-
-# 4. Run
 npm start
 ```
 
-The app starts silently in the system tray. On first launch with no API key configured, the Settings window opens automatically.
+On first launch, ScreenAI starts in the system tray. If no provider credentials are configured, the Settings window opens so you can finish setup.
 
-> You can also enter your API key through the UI: right-click the tray icon → **Settings**.
+### Configure provider keys
 
----
+The recommended path is the Settings UI:
 
-## Configuration
+1. Launch the app
+2. Open the tray icon menu
+3. Choose **Settings**
+4. Add the provider keys you want to use
 
-### Option A — Settings UI (recommended)
+You can also use a local `.env` file for development:
 
-Right-click the tray icon → **Settings** and enter your keys. Settings are saved to your OS user-data directory and persist across updates.
+```bash
+cp .env.example .env
+```
 
-### Option B — `.env` file (dev / CI)
-
-Copy `.env.example` to `.env` in the project root:
+Example environment variables:
 
 ```env
 GEMINI_API_KEY=your_gemini_api_key_here
+OPENAI_API_KEY=your_openai_api_key_here
+ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
+GEMINI_MODEL=gemini-3-flash-preview
 ```
 
-The settings file takes priority over `.env`. Environment variables are a fallback for automation and local development.
+Settings stored by the application take precedence over environment variables.
 
----
+## Default Hotkeys
 
-## Supported Models
-
-| Model | Provider | Used For |
+| Function | Windows | macOS |
 |---|---|---|
-| `gemini-3-flash-preview` | Google Gemini | Overlay Q&A (default) |
-| `gemini-2.5-flash` | Google Gemini | Jarvis voice guide (fixed) |
-| `gpt-4o` | OpenAI | Overlay Q&A |
-| `gpt-4o-mini` | OpenAI | Overlay Q&A |
-| `o1` | OpenAI | Overlay Q&A |
-| `o3-mini` | OpenAI | Overlay Q&A |
+| Screen capture | `F7`, `Ctrl+Shift+Y`, `Alt+Shift+Y` | `Shift+Cmd+Y` |
+| Jarvis voice guide | `F8` | `Shift+Cmd+V` |
 
-The **overlay** model is user-selectable in Settings. The **Jarvis** voice guide always uses `gemini-2.5-flash` for optimal speed.
+Both hotkeys can be changed in Settings.
 
----
+## Providers and Models
 
-## Building from Source
+| Workflow | Provider(s) | Notes |
+|---|---|---|
+| Screenshot Q&A | Gemini, OpenAI | Select the overlay model in Settings |
+| Voice guide | Gemini + ElevenLabs | Uses Gemini for guide generation and ElevenLabs for STT/TTS |
 
-### Windows installer (`.exe`)
+Current model choices exposed in the app include:
+
+- `gemini-3-flash-preview`
+- `gemini-2.5-flash`
+- `gpt-4o`
+- `gpt-4o-mini`
+- `o1`
+- `o3-mini`
+
+## Platform Support
+
+- **Windows**: primary release target with installer builds
+- **macOS**: supported from source and for DMG builds
+- **Linux**: not currently documented as an official target
+
+### macOS screen recording permission
+
+macOS requires explicit permission for screen capture. If capture does not work:
+
+1. Open **System Settings**
+2. Go to **Privacy & Security**
+3. Open **Screen Recording**
+4. Enable **ScreenAI**
+5. Restart the app
+
+## Build from Source
 
 ```bash
-# Must run on Windows
+# Windows
 npm run build:win
-# Output → dist/ScreenAI.Setup.2.0.exe
-```
 
-### macOS DMG (`.dmg`)
-
-```bash
-# Must run on macOS
+# macOS
 npm run build:mac
-# Output → dist/ScreenAI-2.0.0.dmg
 ```
 
-### Regenerate app icon
+Packaged artifacts are written to `dist/`.
 
-```bash
-npm run create-icon
+## Project Layout
+
+```text
+main/       Electron main-process logic: app lifecycle, hotkeys, capture, LLM, voice
+renderer/   HTML/CSS/JS renderer windows for capture, overlay, guide, HUD, and settings
+preload/    Secure IPC bridge exposed to renderer processes
+assets/     Icons and other bundled assets
+scripts/    Small build and asset-generation utilities
+docs/       Architecture and implementation notes
 ```
 
----
+## Privacy and Security
 
-## macOS: Screen Recording Permission
+- API keys are stored locally in the app's user-data directory or provided through environment variables
+- Screenshots and voice data are sent only to the providers needed for the selected workflow
+- Renderer windows run with `contextIsolation: true` and `nodeIntegration: false`
+- The application does not depend on loading remote UI content
 
-On macOS 10.15+, the OS requires explicit permission for screen capture.
+## Documentation
 
-On first use a permission dialog will appear. If you accidentally denied it:
+Additional project notes live in [docs/](./docs), including:
 
-1. Open **System Settings** → **Privacy & Security** → **Screen Recording**
-2. Enable **ScreenAI**
-3. Restart the app
-
----
-
-## Project Structure
-
-```
-screenai/
-├── main/
-│   ├── main.js          # App entry point, window management, IPC routing
-│   ├── hotkey.js        # Global shortcuts + system tray icon
-│   ├── screenshot.js    # Full-screen capture and jimp region crop
-│   ├── llm.js           # Gemini + OpenAI streaming API, JPEG compression
-│   ├── stt.js           # ElevenLabs speech-to-text
-│   ├── tts.js           # ElevenLabs TTS (streaming)
-│   ├── settings.js      # Read/write settings.json in OS userData dir
-│   └── config.js        # .env loader
-│
-├── renderer/
-│   ├── capture.html/js/css       # Snipping-tool selection window
-│   ├── overlay.html/js/css       # Ask/answer overlay panel
-│   ├── voice-hud.html/js/css     # Jarvis recording indicator HUD
-│   ├── guide.html/js/css         # Jarvis voice guide result window
-│   └── settings.html/js/css      # Settings window (redesigned v2.0)
-│
-├── preload/
-│   └── preload.js       # Secure contextBridge IPC surface
-│
-├── assets/
-│   └── icons/           # App icon (generated by create-icon.js)
-│
-├── scripts/
-│   └── create-icon.js   # Resizes icon.png → assets/icons/icon.png
-│
-├── .env.example         # Template for local API key configuration
-├── electron-builder.json
-└── package.json
-```
-
----
-
-## Architecture
-
-All OS-level work (hotkeys, file I/O, HTTP) runs in the **main process**. Renderer pages are locked down (`contextIsolation: true`, `nodeIntegration: false`) and communicate only through named IPC channels exposed by `preload/preload.js` via `contextBridge`.
-
-**Screenshot flow:**
-```
-Hotkey → screenshot.js captures full screen (PNG)
-       → Capture window: user drags a region
-       → IPC: capture:region-selected → main crops with jimp
-       → Overlay window: user types question, response streams in
-       → IPC: overlay:ask → llm.js → Gemini or OpenAI streaming API
-```
-
-**Jarvis voice flow:**
-```
-F8 hotkey → Voice HUD opens, mic starts
-          → F8 again → audio sent to main
-          → [parallel] ElevenLabs STT  +  captureFullScreen()
-          → llm.js → gemini-2.5-flash (JPEG screenshot)
-          → Guide window opens (guide:init)
-          → [streaming] ElevenLabs TTS chunks → guide:tts-chunk → MediaSource playback
-```
-
-A 1×1 hidden **background window** keeps the Win32 message pump alive so global hotkeys work even when no visible window is open.
-
----
-
-## Settings Storage
-
-| Platform | Path |
-|---|---|
-| Windows | `%APPDATA%\screen-ai-assistant\settings.json` |
-| macOS   | `~/Library/Application Support/screen-ai-assistant/settings.json` |
-
-API keys are stored only on your local machine and are never transmitted anywhere except directly to the respective AI provider API.
-
----
-
-## Tech Stack
-
-| Package | Version | Purpose |
-|---|---|---|
-| `electron` | ^29 | Desktop app framework |
-| `electron-builder` | ^24 | Cross-platform packaging |
-| `screenshot-desktop` | ^1.15 | Full-screen capture |
-| `jimp` | 0.22.12 | Image cropping + JPEG compression |
-| `node-fetch` | 2.7.0 | HTTP client for AI provider APIs |
-
----
+- [Architecture overview](./docs/architecture.md)
+- [Screen capture](./docs/screen-capture.md)
+- [Global hotkeys](./docs/global-hotkeys.md)
+- [LLM integration](./docs/llm-integration.md)
+- [Security model](./docs/security.md)
 
 ## Contributing
 
-Contributions are welcome. To get started:
+Contributions are welcome. For setup and contribution expectations, see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
-1. Fork the repo and create a feature branch
-2. `npm install` and `npm start` to run locally
-3. Make your changes
-4. Open a pull request with a clear description of what you changed and why
+Good first contributions typically include:
 
-Please keep PRs focused — one feature or fix per PR.
+- bug fixes
+- UX improvements
+- provider integration improvements
+- performance work around capture, streaming, or rendering
+- documentation and onboarding improvements
 
----
+Please keep pull requests focused and include a clear description of what changed and why.
 
 ## License
 
-[Apache 2.0](./LICENSE) — © 2026 Mohammed Jaseel Kunnathodika
+ScreenAI is licensed under the [Apache License 2.0](./LICENSE).
 
----
+## Credits
 
-## Author
-
-**Mohammed Jaseel Kunnathodika**
-[linkedin.com/in/jaseelkt](https://www.linkedin.com/in/jaseelkt/)
+Created and maintained by **Mohammed Jaseel Kunnathodika**.
