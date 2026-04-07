@@ -19,7 +19,12 @@
  *   Capture window  →  user drags region
  *   →  jimp crop
  *   →  Overlay window  →  user types question
- *   →  Gemini API  →  response shown in overlay
+ *   →  Gemini/OpenAI API  →  response shown in overlay
+ *
+ * Voice Guide flow (F8 / Shift+Cmd+V):
+ *   Voice HUD opens  →  user speaks  →  hotkey again to stop
+ *   →  ElevenLabs STT  →  full-screen capture
+ *   →  LLM structured guide  →  Guide window  →  ElevenLabs TTS
  */
 
 require('./config'); // Load .env into process.env early
@@ -36,9 +41,11 @@ const {
 const path = require('path');
 
 const { registerHotkeys, reregisterHotkeys, unregisterHotkeys } = require('./hotkey');
-const { captureFullScreen, cropImage }        = require('./screenshot');
-const { streamLLM }                           = require('./llm');
-const settingsStore                           = require('./settings');
+const { captureFullScreen, cropImage }                          = require('./screenshot');
+const { streamLLM, getVoiceGuide }                             = require('./llm');
+const { transcribeAudio }                                       = require('./stt');
+const { synthesizeSpeech }                                      = require('./tts');
+const settingsStore                                             = require('./settings');
 
 const APP_ICON = nativeImage.createFromPath(
   path.join(__dirname, '../assets/icons/icon.png')
@@ -49,31 +56,40 @@ let backgroundWindow = null;
 let captureWindow    = null;
 let overlayWindow    = null;
 let settingsWindow   = null;
+let voiceHudWindow   = null;
+let guideWindow      = null;
 
 // In-flight screenshot buffers
 let fullScreenBuffer = null;
 let croppedBuffer    = null;
+
+// ─── Voice session state machine ──────────────────────────────────────────
+// States: idle | recording | transcribing | capturing | analyzing | showing_result | speaking | error
+let voiceState = 'idle';
+
+function setVoiceState(state, message) {
+  voiceState = state;
+  console.log(`[Voice] State → ${state}${message ? ': ' + message : ''}`);
+  if (voiceHudWindow && !voiceHudWindow.isDestroyed()) {
+    voiceHudWindow.webContents.send('voice:state', { state, message: message || null });
+  }
+}
 
 // ─── App lifecycle ────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock.hide();
 
-  // Apply startup-at-login preference from settings.
   applyStartupSetting();
-
-  // Hidden background window keeps Win32 hotkey message pump alive.
   createBackgroundWindow();
 
-  // Register hotkeys and tray icon.
-  registerHotkeys(onHotkeyTriggered, openSettingsWindow);
+  registerHotkeys(onHotkeyTriggered, openSettingsWindow, onVoiceHotkeyTriggered);
 
-  // Show settings on first run (no API key configured yet).
   if (settingsStore.isFirstRun() || !settingsStore.getApiKey()) {
     openSettingsWindow();
   }
 
-  console.log('[App] Screen AI Assistant running. F7 / Ctrl+Shift+Y to capture.');
+  console.log('[App] Screen AI Assistant running. F7 / Ctrl+Shift+Y to capture. F8 for voice guide.');
 });
 
 app.on('window-all-closed', (e) => e.preventDefault());
@@ -88,7 +104,6 @@ function applyStartupSetting() {
   const enabled = settingsStore.getSetting('startWithOS', true);
   app.setLoginItemSettings({
     openAtLogin: enabled,
-    // On Windows, pass the --hidden flag so the app starts silently.
     args: process.platform === 'win32' ? ['--hidden'] : [],
   });
 }
@@ -108,17 +123,20 @@ function createBackgroundWindow() {
   });
 }
 
-// ─── Hotkey / tray trigger ────────────────────────────────────────────────
+// ─── Screenshot hotkey / tray trigger ────────────────────────────────────
 
 async function onHotkeyTriggered() {
-  console.log('[App] *** Hotkey fired! ***');
+  console.log('[App] *** Screenshot hotkey fired! ***');
 
-  // If settings are open, don't also open the capture flow.
   if (settingsWindow) { settingsWindow.focus(); return; }
-
   if (captureWindow || overlayWindow) { closeAll(); return; }
 
-  // Guard: require API key before capture.
+  // Don't start screenshot flow while voice is active
+  if (voiceState !== 'idle') {
+    console.log('[App] Voice flow active — ignoring screenshot hotkey');
+    return;
+  }
+
   if (!settingsStore.getApiKey()) {
     openSettingsWindow();
     return;
@@ -133,6 +151,60 @@ async function onHotkeyTriggered() {
   }
 }
 
+// ─── Voice hotkey trigger ─────────────────────────────────────────────────
+
+async function onVoiceHotkeyTriggered() {
+  console.log('[Voice] *** Voice hotkey fired! State:', voiceState);
+
+  if (settingsWindow) { settingsWindow.focus(); return; }
+
+  // Toggle: if currently recording → stop and submit
+  if (voiceState === 'recording') {
+    console.log('[Voice] Hotkey fired during recording → stopping');
+    if (voiceHudWindow && !voiceHudWindow.isDestroyed()) {
+      voiceHudWindow.webContents.send('voice:stop-recording');
+    }
+    return;
+  }
+
+  // HUD is loading but renderer not ready yet — ignore the press to avoid
+  // sending IPC messages into a window that hasn't set up its listeners.
+  if (voiceState === 'starting') {
+    console.log('[Voice] HUD still loading — ignoring hotkey');
+    return;
+  }
+
+  // If in any other active state → cancel
+  if (voiceState !== 'idle') {
+    console.log('[Voice] Cancelling active voice session');
+    cancelVoiceSession();
+    return;
+  }
+
+  // Start new session
+  if (!settingsStore.getElevenLabsKey()) {
+    dialog.showMessageBox({
+      type: 'info',
+      title: 'Voice Guide',
+      message: 'No ElevenLabs API key configured.\nOpen Settings and enable Voice Guide to add your key.',
+    });
+    return;
+  }
+
+  if (!settingsStore.getApiKey()) {
+    openSettingsWindow();
+    return;
+  }
+
+  // Don't start voice if screenshot flow is active
+  if (captureWindow || overlayWindow) {
+    console.log('[Voice] Screenshot flow active — ignoring voice hotkey');
+    return;
+  }
+
+  await startVoiceSession();
+}
+
 // ─── Settings window ──────────────────────────────────────────────────────
 
 function openSettingsWindow() {
@@ -140,7 +212,7 @@ function openSettingsWindow() {
 
   settingsWindow = new BrowserWindow({
     width:       440,
-    height:      720,
+    height:      900,
     resizable:   false,
     frame:       true,
     skipTaskbar: false,
@@ -155,20 +227,18 @@ function openSettingsWindow() {
 
   settingsWindow.setMenuBarVisibility(false);
   settingsWindow.loadFile(path.join(__dirname, '../renderer/settings.html'));
-
   settingsWindow.on('closed', () => { settingsWindow = null; });
 }
 
-// IPC: renderer requests current settings
 ipcMain.handle('settings:get', () => settingsStore.loadSettings());
 
-// IPC: renderer saves settings
 ipcMain.handle('settings:save', (_event, partial) => {
   try {
     settingsStore.saveSettings(partial);
     applyStartupSetting();
-    // Re-register hotkeys if the custom hotkey changed.
-    if ('customHotkey' in partial) reregisterHotkeys();
+    if ('customHotkey' in partial || 'voiceHotkey' in partial || 'voiceEnabled' in partial) {
+      reregisterHotkeys();
+    }
     console.log('[Settings] Saved:', JSON.stringify(partial));
     return { ok: true };
   } catch (err) {
@@ -177,17 +247,13 @@ ipcMain.handle('settings:save', (_event, partial) => {
   }
 });
 
-// IPC: renderer closes settings window
 ipcMain.on('settings:close', () => { if (settingsWindow) settingsWindow.close(); });
-
-// IPC: open URL in system browser
 ipcMain.on('open:external', (_e, url) => shell.openExternal(url));
 
-
-// ─── Phase 1: Capture window ──────────────────────────────────────────────
+// ─── Screenshot capture flow ──────────────────────────────────────────────
 
 async function startCaptureFlow() {
-  console.log('[App] Capturing full screen...');
+  console.log('[App] Capturing full screen…');
   fullScreenBuffer = await captureFullScreen();
   console.log(`[App] Screenshot captured: ${fullScreenBuffer.length} bytes`);
   openCaptureWindow();
@@ -250,7 +316,7 @@ ipcMain.on('capture:region-selected', async (_event, logicalRegion) => {
 
 ipcMain.on('capture:cancel', closeAll);
 
-// ─── Phase 2: Overlay window ──────────────────────────────────────────────
+// ─── Overlay window ───────────────────────────────────────────────────────
 
 function openOverlayWindow(logicalRegion) {
   const { workAreaSize } = screen.getPrimaryDisplay();
@@ -309,7 +375,267 @@ ipcMain.on('overlay:ask', async (event, { prompt, history }) => {
 
 ipcMain.on('overlay:close', closeAll);
 
-// ─── Cleanup ──────────────────────────────────────────────────────────────
+// ─── Voice Guide flow ─────────────────────────────────────────────────────
+
+async function startVoiceSession() {
+  console.log('[Voice] Starting voice session');
+  // Use 'starting' until the HUD renderer signals it is ready.
+  // This prevents F8 presses (and stop/cancel IPC) from being sent into
+  // a window whose JS listeners are not yet registered.
+  setVoiceState('starting');
+
+  openVoiceHudWindow();
+}
+
+
+function openVoiceHudWindow() {
+  if (voiceHudWindow && !voiceHudWindow.isDestroyed()) {
+    voiceHudWindow.destroy();
+    voiceHudWindow = null;
+  }
+
+  const { workAreaSize } = screen.getPrimaryDisplay();
+  const W = 220, H = 50;
+
+  voiceHudWindow = new BrowserWindow({
+    x:           Math.round((workAreaSize.width - W) / 2),
+    y:           workAreaSize.height - H - 40,
+    width:       W,
+    height:      H,
+    transparent: true,
+    frame:       false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable:   false,
+    movable:     true,
+    hasShadow:   false,
+    focusable:   false,
+    webPreferences: {
+      preload:          path.join(__dirname, '../preload/preload.js'),
+      contextIsolation: true,
+      nodeIntegration:  false,
+    },
+  });
+
+  voiceHudWindow.setAlwaysOnTop(true, 'screen-saver');
+  voiceHudWindow.loadFile(path.join(__dirname, '../renderer/voice-hud.html'));
+
+  voiceHudWindow.once('ready-to-show', () => {
+    voiceHudWindow.show();
+    console.log('[Voice] HUD shown');
+  });
+
+  // did-finish-load fires after ALL renderer scripts have executed —
+  // safe to transition state and send IPC commands now.
+  voiceHudWindow.webContents.once('did-finish-load', () => {
+    if (voiceState !== 'starting') {
+      console.log('[Voice] did-finish-load: state is', voiceState, '— not starting recording');
+      return;
+    }
+
+    setVoiceState('recording');
+    voiceHudWindow.webContents.send('voice:start-recording');
+    console.log('[Voice] Page loaded — start-recording sent');
+
+    // Safety timeout: auto-stop if user forgets to press F8 again
+    const maxMs = settingsStore.getSetting('maxVoiceDurationMs', 20000);
+    setTimeout(() => {
+      if (voiceState === 'recording') {
+        console.log('[Voice] Max duration reached — auto-stopping');
+        if (voiceHudWindow && !voiceHudWindow.isDestroyed()) {
+          voiceHudWindow.webContents.send('voice:stop-recording');
+        }
+      }
+    }, maxMs);
+  });
+
+  voiceHudWindow.on('closed', () => {
+    voiceHudWindow = null;
+    // If closed mid-session, reset to idle
+    if (voiceState === 'recording') {
+      voiceState = 'idle';
+    }
+  });
+}
+
+// Renderer → main: audio ready
+ipcMain.on('voice:audio-ready', async (_event, { audioBase64, mimeType }) => {
+  if (voiceState !== 'recording') {
+    console.warn('[Voice] audio-ready received but state is', voiceState, '— ignoring');
+    return;
+  }
+
+  console.log(`[Voice] Audio ready: ${audioBase64.length} base64 chars, mime=${mimeType}`);
+
+  try {
+    await runVoicePipeline(audioBase64, mimeType);
+  } catch (err) {
+    console.error('[Voice] Pipeline error:', err.message);
+    setVoiceState('error', err.message);
+    // Show error in HUD briefly then close
+    setTimeout(() => cleanupVoiceSession(), 2500);
+    // Also show error in guide window if it's open
+    if (guideWindow && !guideWindow.isDestroyed()) {
+      guideWindow.webContents.send('guide:error', { message: err.message });
+    }
+  }
+});
+
+// Renderer → main: error from HUD renderer (e.g. mic denied)
+ipcMain.on('voice:error', (_event, { message }) => {
+  console.error('[Voice] Renderer error:', message);
+  setVoiceState('error', message);
+  setTimeout(() => cleanupVoiceSession(), 2500);
+});
+
+async function runVoicePipeline(audioBase64, mimeType) {
+  const t0 = Date.now();
+
+  // ── Step 1: STT ──────────────────────────────────────────────────────────
+  setVoiceState('transcribing');
+  console.log('[Voice] [1/4] Transcribing audio…');
+
+  const audioBuffer = Buffer.from(audioBase64, 'base64');
+  const sttResult   = await transcribeAudio(audioBuffer, mimeType);
+  const transcript  = sttResult.text;
+
+  console.log(`[Voice] Transcript (${sttResult.durationMs}ms): "${transcript}"`);
+
+  if (!transcript) {
+    throw new Error('Empty transcript — no speech detected.');
+  }
+
+  // ── Step 2: Screen capture ───────────────────────────────────────────────
+  setVoiceState('capturing');
+  console.log('[Voice] [2/4] Capturing screen…');
+
+  const screenshotBuffer = await captureFullScreen();
+  console.log(`[Voice] Screenshot: ${screenshotBuffer.length} bytes`);
+
+  // ── Step 3: LLM guide ────────────────────────────────────────────────────
+  setVoiceState('analyzing');
+  console.log('[Voice] [3/4] Getting voice guide from LLM…');
+
+  const guide = await getVoiceGuide(screenshotBuffer, transcript);
+  console.log(`[Voice] Guide: confidence=${guide.overall_confidence}, steps=${guide.steps.length}`);
+
+  // ── Step 4: Open guide window ────────────────────────────────────────────
+  setVoiceState('showing_result');
+  console.log('[Voice] [4/4] Opening guide window…');
+
+  // Close HUD once guide is ready
+  if (voiceHudWindow && !voiceHudWindow.isDestroyed()) {
+    voiceHudWindow.destroy();
+    voiceHudWindow = null;
+  }
+
+  const screenshotDataUrl = `data:image/png;base64,${screenshotBuffer.toString('base64')}`;
+  openGuideWindow({ ...guide, screenshotDataUrl });
+
+  // ── Step 5: TTS (non-blocking — guide shows regardless) ──────────────────
+  console.log('[Voice] Starting TTS for spoken summary…');
+  setVoiceState('speaking');
+
+  runTTS(guide.spoken_summary).catch((err) => {
+    console.warn('[Voice] TTS failed (non-fatal):', err.message);
+    setVoiceState('showing_result');
+  });
+
+  const total = Date.now() - t0;
+  console.log(`[Voice] Full pipeline complete in ${total}ms`);
+}
+
+async function runTTS(text) {
+  const { audioBuffer, mimeType } = await synthesizeSpeech(text);
+  console.log(`[Voice] TTS audio: ${audioBuffer.length} bytes`);
+
+  if (guideWindow && !guideWindow.isDestroyed()) {
+    guideWindow.webContents.send('guide:play-audio', {
+      audioBase64: audioBuffer.toString('base64'),
+      mimeType,
+    });
+  }
+
+  setVoiceState('showing_result');
+}
+
+function openGuideWindow(data) {
+  if (guideWindow && !guideWindow.isDestroyed()) {
+    guideWindow.destroy();
+    guideWindow = null;
+  }
+
+  const { workAreaSize } = screen.getPrimaryDisplay();
+  const W = 680, H = 460;
+
+  guideWindow = new BrowserWindow({
+    x:           Math.round((workAreaSize.width  - W) / 2),
+    y:           Math.round((workAreaSize.height - H) / 2),
+    width:       W,
+    height:      H,
+    transparent: true,
+    frame:       false,
+    alwaysOnTop: true,
+    skipTaskbar: false,
+    resizable:   true,
+    hasShadow:   true,
+    icon:        APP_ICON,
+    webPreferences: {
+      preload:          path.join(__dirname, '../preload/preload.js'),
+      contextIsolation: true,
+      nodeIntegration:  false,
+    },
+  });
+
+  guideWindow.setAlwaysOnTop(true, 'floating');
+  guideWindow.loadFile(path.join(__dirname, '../renderer/guide.html'));
+
+  guideWindow.once('ready-to-show', () => {
+    guideWindow.show();
+    guideWindow.focus();
+    guideWindow.webContents.send('guide:init', data);
+  });
+
+  guideWindow.on('closed', () => {
+    guideWindow = null;
+    if (voiceState !== 'idle') voiceState = 'idle';
+    console.log('[Voice] Guide window closed → idle');
+  });
+}
+
+ipcMain.on('guide:close', () => {
+  if (guideWindow && !guideWindow.isDestroyed()) {
+    guideWindow.destroy();
+    guideWindow = null;
+  }
+  cleanupVoiceSession();
+});
+
+// ─── Voice session cleanup ────────────────────────────────────────────────
+
+function cancelVoiceSession() {
+  if (voiceHudWindow && !voiceHudWindow.isDestroyed()) {
+    voiceHudWindow.webContents.send('voice:cancel');
+    setTimeout(() => {
+      if (voiceHudWindow && !voiceHudWindow.isDestroyed()) {
+        voiceHudWindow.destroy();
+        voiceHudWindow = null;
+      }
+    }, 200);
+  }
+  cleanupVoiceSession();
+}
+
+function cleanupVoiceSession() {
+  voiceState = 'idle';
+  if (voiceHudWindow && !voiceHudWindow.isDestroyed()) {
+    voiceHudWindow.destroy();
+    voiceHudWindow = null;
+  }
+  console.log('[Voice] Session cleaned up → idle');
+}
+
+// ─── Screenshot flow cleanup ──────────────────────────────────────────────
 
 function closeAll() {
   if (captureWindow)  { captureWindow.destroy();  captureWindow  = null; }

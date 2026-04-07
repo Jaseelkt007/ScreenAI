@@ -17,6 +17,7 @@ const settingsStore = require('./settings');
 let tray = null;
 let _onCapture  = null;
 let _onSettings = null;
+let _onVoice    = null;
 
 const PLATFORM_SHORTCUTS = {
   darwin: ['Shift+Command+Y'],
@@ -24,15 +25,23 @@ const PLATFORM_SHORTCUTS = {
   linux:  ['F7', 'CommandOrControl+Shift+Y'],
 };
 
+const VOICE_SHORTCUTS = {
+  darwin: ['Shift+Command+V'],
+  win32:  ['F8'],
+  linux:  ['F8'],
+};
+
 // ─── Public API ────────────────────────────────────────────────────────────
 
 /**
  * @param {() => void} onCapture  - Called to start a screen capture.
  * @param {() => void} onSettings - Called to open the settings window.
+ * @param {() => void} [onVoice]  - Called to toggle voice recording.
  */
-function registerHotkeys(onCapture, onSettings) {
+function registerHotkeys(onCapture, onSettings, onVoice) {
   _onCapture  = onCapture;
   _onSettings = onSettings;
+  _onVoice    = onVoice || null;
   _doRegisterShortcuts();
   createTray(onCapture, onSettings);
 }
@@ -99,6 +108,32 @@ function _doRegisterShortcuts() {
   }
 
   if (!anyOk) console.error('[Hotkey] No shortcuts registered — use the tray icon.');
+
+  // Always register voice hotkey so F8 works out of the box.
+  // The handler in main.js checks for the API key and shows a dialog if missing.
+  if (_onVoice) {
+    const customVoiceHotkey = settingsStore.getSetting('voiceHotkey', '');
+    const voiceShortcuts = customVoiceHotkey
+      ? [customVoiceHotkey]
+      : (VOICE_SHORTCUTS[process.platform] || VOICE_SHORTCUTS.linux);
+
+    for (const shortcut of voiceShortcuts) {
+      try {
+        const ok = globalShortcut.register(shortcut, () => {
+          console.log(`[Hotkey] Voice triggered: ${shortcut}`);
+          _onVoice();
+        });
+        if (ok) {
+          console.log(`[Hotkey] Voice registered: ${shortcut}`);
+          break;
+        } else {
+          console.warn(`[Hotkey] Could not register voice hotkey: ${shortcut}`);
+        }
+      } catch (err) {
+        console.warn(`[Hotkey] Error registering voice hotkey ${shortcut}: ${err.message}`);
+      }
+    }
+  }
 }
 
 // ─── Tray icon ────────────────────────────────────────────────────────────

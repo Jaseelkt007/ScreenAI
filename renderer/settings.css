@@ -302,3 +302,72 @@ select option, select optgroup {
 }
 .small-btn.accent:hover { opacity: 0.88; }
 
+/* Section divider */
+.section-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 24px 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.3);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+.section-divider::before, .section-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(255,255,255,0.07);
+}
+
+/* Voice hotkey row */
+#voice-hotkey-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 2px;
+}
+
+#voice-hotkey-display {
+  flex: 1;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  color: #e0e0e0;
+  font-family: 'Consolas', 'SF Mono', monospace;
+  font-size: 13px;
+  padding: 8px 12px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  transition: border-color 0.2s;
+}
+
+#voice-hotkey-display.recording {
+  border-color: rgba(0,212,255,0.6);
+  color: #00d4ff;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+/* ElevenLabs key row */
+#el-key-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+#el-key-row input { flex: 1; }
+
+#toggle-el-visibility {
+  flex-shrink: 0;
+  width: 36px; height: 36px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  color: rgba(255,255,255,0.4);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+#toggle-el-visibility:hover { background: rgba(255,255,255,0.1); color: #e0e0e0; }
+

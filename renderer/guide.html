@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+  <title>Screen AI — Voice Guide</title>
+  <link rel="stylesheet" href="guide.css" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- Title bar -->
+    <div id="titlebar">
+      <div id="titlebar-left">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <rect x="9" y="2" width="6" height="12" rx="3" stroke="#00d4ff" stroke-width="1.8"/>
+          <path d="M5 10a7 7 0 0 0 14 0" stroke="#00d4ff" stroke-width="1.8" stroke-linecap="round"/>
+          <line x1="12" y1="17" x2="12" y2="21" stroke="#00d4ff" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        <span>Voice Guide</span>
+      </div>
+      <div id="titlebar-actions">
+        <button id="replay-btn" title="Replay spoken answer" class="icon-btn hidden">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+            <polygon points="5,3 19,12 5,21" fill="currentColor"/>
+          </svg>
+        </button>
+        <button id="close-btn" title="Close" class="icon-btn close-btn">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+            <line x1="18" y1="6" x2="6" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <line x1="6" y1="6" x2="18" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Loading state -->
+    <div id="loading-state">
+      <div id="spinner"></div>
+      <p>Analyzing your screen…</p>
+    </div>
+
+    <!-- Main content (hidden until guide arrives) -->
+    <div id="content" class="hidden">
+
+      <!-- Left: screenshot preview -->
+      <div id="screenshot-col">
+        <div id="screenshot-wrap">
+          <canvas id="screenshot-canvas"></canvas>
+        </div>
+      </div>
+
+      <!-- Right: guide panel -->
+      <div id="guide-col">
+
+        <!-- Transcript -->
+        <div id="transcript-row">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" class="quote-icon">
+            <path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z" fill="currentColor" opacity="0.4"/>
+            <path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3c0 1 0 1 1 1z" fill="currentColor" opacity="0.4"/>
+          </svg>
+          <p id="transcript-text"></p>
+        </div>
+
+        <!-- Summary -->
+        <p id="summary-text"></p>
+
+        <!-- Steps -->
+        <ol id="steps-list"></ol>
+
+        <!-- Confidence warning -->
+        <div id="confidence-warning" class="hidden">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>Low confidence — please verify steps manually.</span>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Error state -->
+    <div id="error-state" class="hidden">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+        <circle cx="12" cy="12" r="10" stroke="#fca5a5" stroke-width="1.8"/>
+        <line x1="12" y1="8" x2="12" y2="12" stroke="#fca5a5" stroke-width="1.8" stroke-linecap="round"/>
+        <circle cx="12" cy="16" r="1" fill="#fca5a5"/>
+      </svg>
+      <p id="error-message">Something went wrong.</p>
+    </div>
+
+  </div>
+
+  <script src="guide.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node:*)",
+      "Read(//mnt/d/projects/**)",
+      "Bash(npx create-next-app@latest screenai-website --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm)",
+      "Bash(cd:*)",
+      "Bash(ls:*)",
+      "Bash(npm run:*)",
+      "Bash(file:*)",
+      "Bash(git init:*)",
+      "Bash(which convert:*)",
+      "Bash(npm install:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(identify:*)",
+      "Read(//mnt/d/projects/Claude_UI/$APPDATA/screen-ai-assistant/**)",
+      "Read(//mnt/c/Users/**)",
+      "Bash(find:*)",
+      "Bash(cat:*)",
+      "Bash(grep -E \"\\(package\\\\.json|\\\\.js$\\)\")"
+    ]
+  }
+}

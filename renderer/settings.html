@@ -101,13 +101,71 @@
 
     <!-- Global Hotkey -->
     <div class="section">
-      <label>Global Hotkey</label>
+      <label>Screen Capture Hotkey</label>
       <div id="hotkey-row">
         <div id="hotkey-display">F7</div>
         <button id="record-hotkey-btn" class="small-btn">Change</button>
         <button id="reset-hotkey-btn" class="small-btn">Reset</button>
       </div>
       <p class="hint" id="hotkey-hint">Click "Change" then press your desired key combination</p>
+    </div>
+
+    <!-- Section divider -->
+    <div class="section-divider">
+      <span>Voice Guide (Phase 1)</span>
+    </div>
+
+    <!-- Voice Enable -->
+    <div class="section">
+      <label class="checkbox-label">
+        <input type="checkbox" id="voice-enabled-checkbox" />
+        <span class="checkbox-custom"></span>
+        Enable Voice Guide (ElevenLabs)
+      </label>
+    </div>
+
+    <!-- ElevenLabs API Key -->
+    <div class="section" id="voice-settings-section">
+      <label for="elevenlabs-key-input">ElevenLabs API Key</label>
+      <div id="el-key-row">
+        <input
+          type="password"
+          id="elevenlabs-key-input"
+          placeholder="sk_..."
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button id="toggle-el-visibility" title="Show / hide key">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"
+                  stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>
+          </svg>
+        </button>
+      </div>
+      <p class="hint">
+        Get a key at
+        <span class="link" id="elevenlabs-link">elevenlabs.io/app/settings/api-keys</span>
+      </p>
+
+      <!-- Voice Hotkey -->
+      <label style="margin-top:10px">Voice Hotkey</label>
+      <div id="voice-hotkey-row">
+        <div id="voice-hotkey-display">F8 (Default)</div>
+        <button id="record-voice-hotkey-btn" class="small-btn">Change</button>
+        <button id="reset-voice-hotkey-btn" class="small-btn">Reset</button>
+      </div>
+
+      <!-- Voice ID -->
+      <label style="margin-top:10px">Voice ID</label>
+      <input
+        type="text"
+        id="voice-id-input"
+        placeholder="JBFqnCBsd6RMkjVDRZzb"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <p class="hint">ElevenLabs voice ID to use for spoken responses</p>
     </div>
 
     <div id="status-bar" class="hidden"></div>

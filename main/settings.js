@@ -48,12 +48,19 @@ function getSetting(key, fallback) {
 
 function getDefaults() {
   return {
-    geminiApiKey: '',
-    openaiApiKey: '',
-    geminiModel:  'gemini-3-flash-preview',
-    customHotkey: '',
-    startWithOS:  true,   // Enable startup by default after install
-    firstRun:     true,
+    geminiApiKey:        '',
+    openaiApiKey:        '',
+    geminiModel:         'gemini-3-flash-preview',
+    customHotkey:        '',
+    startWithOS:         true,
+    firstRun:            true,
+    // Voice Guide (Phase 1)
+    elevenlabsApiKey:    '',
+    voiceEnabled:        false,
+    voiceHotkey:         '',
+    voiceId:             'JBFqnCBsd6RMkjVDRZzb', // ElevenLabs default "George"
+    maxVoiceDurationMs:  20000,
+    preferredSttLanguage: '',
   };
 }
 
@@ -93,4 +100,9 @@ function getModel() {
   return getSetting('geminiModel', '') || process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
 }
 
-module.exports = { loadSettings, saveSettings, getSetting, isFirstRun, getApiKey, getOpenAIKey, getModel };
+/** Get ElevenLabs API key. */
+function getElevenLabsKey() {
+  return getSetting('elevenlabsApiKey', '') || process.env.ELEVENLABS_API_KEY || '';
+}
+
+module.exports = { loadSettings, saveSettings, getSetting, isFirstRun, getApiKey, getOpenAIKey, getModel, getElevenLabsKey };
