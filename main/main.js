@@ -44,7 +44,7 @@ const { registerHotkeys, reregisterHotkeys, unregisterHotkeys } = require('./hot
 const { captureFullScreen, cropImage }                          = require('./screenshot');
 const { streamLLM, getVoiceGuide }                             = require('./llm');
 const { transcribeAudio }                                       = require('./stt');
-const { synthesizeSpeech }                                      = require('./tts');
+const { synthesizeSpeech, streamSpeech }                        = require('./tts');
 const settingsStore                                             = require('./settings');
 
 const APP_ICON = nativeImage.createFromPath(
@@ -64,8 +64,21 @@ let fullScreenBuffer = null;
 let croppedBuffer    = null;
 
 // ─── Voice session state machine ──────────────────────────────────────────
-// States: idle | recording | transcribing | capturing | analyzing | showing_result | speaking | error
+// States: idle | starting | recording | transcribing | capturing | analyzing | showing_result | speaking | error
 let voiceState = 'idle';
+
+// ─── Performance timing ────────────────────────────────────────────────────
+// Anchored at the moment the voice hotkey fires so every [PERF] log is
+// relative to the same origin. Used by the /latency_report skill.
+let _voicePerfOrigin    = 0; // absolute ms timestamp of hotkey press
+let _recordingStartedAt = 0; // absolute ms timestamp when MediaRecorder started
+
+// ─── TTS streaming state ───────────────────────────────────────────────────
+// Chunks that arrive before the guide window renderer is ready are buffered
+// here and flushed once ready-to-show fires.
+let _guideAudioReady    = false;
+let _guideTtsBuffer     = []; // array of base64 strings
+let _guideTtsStreamEnded = false;
 
 function setVoiceState(state, message) {
   voiceState = state;
@@ -378,10 +391,10 @@ ipcMain.on('overlay:close', closeAll);
 // ─── Voice Guide flow ─────────────────────────────────────────────────────
 
 async function startVoiceSession() {
+  _voicePerfOrigin = Date.now();
   console.log('[Voice] Starting voice session');
+  console.log(`[PERF] origin ts=${_voicePerfOrigin}`);
   // Use 'starting' until the HUD renderer signals it is ready.
-  // This prevents F8 presses (and stop/cancel IPC) from being sent into
-  // a window whose JS listeners are not yet registered.
   setVoiceState('starting');
 
   openVoiceHudWindow();
@@ -433,6 +446,10 @@ function openVoiceHudWindow() {
       return;
     }
 
+    const hudLoadMs = Date.now() - _voicePerfOrigin;
+    console.log(`[PERF] hud-load: ${hudLoadMs}ms  (hotkey → HUD JS ready)`);
+
+    _recordingStartedAt = Date.now();
     setVoiceState('recording');
     voiceHudWindow.webContents.send('voice:start-recording');
     console.log('[Voice] Page loaded — start-recording sent');
@@ -465,7 +482,9 @@ ipcMain.on('voice:audio-ready', async (_event, { audioBase64, mimeType }) => {
     return;
   }
 
+  const recordingDurationMs = _recordingStartedAt ? Date.now() - _recordingStartedAt : 0;
   console.log(`[Voice] Audio ready: ${audioBase64.length} base64 chars, mime=${mimeType}`);
+  console.log(`[PERF] recording-duration: ${recordingDurationMs}ms  (mic open → stop pressed)`);
 
   try {
     await runVoicePipeline(audioBase64, mimeType);
@@ -491,46 +510,62 @@ ipcMain.on('voice:error', (_event, { message }) => {
 async function runVoicePipeline(audioBase64, mimeType) {
   const t0 = Date.now();
 
-  // ── Step 1: STT ──────────────────────────────────────────────────────────
+  // ── Steps 1+2: STT + Screen capture in parallel ──────────────────────────
   setVoiceState('transcribing');
-  console.log('[Voice] [1/4] Transcribing audio…');
+  console.log('[Voice] [1+2] STT + screen capture in parallel…');
 
   const audioBuffer = Buffer.from(audioBase64, 'base64');
-  const sttResult   = await transcribeAudio(audioBuffer, mimeType);
-  const transcript  = sttResult.text;
+  let sttMs = 0, capMs = 0;
 
-  console.log(`[Voice] Transcript (${sttResult.durationMs}ms): "${transcript}"`);
+  const [sttResult, screenshotBuffer] = await Promise.all([
+    (async () => {
+      const t = Date.now();
+      const result = await transcribeAudio(audioBuffer, mimeType);
+      sttMs = Date.now() - t;
+      return result;
+    })(),
+    (async () => {
+      const t = Date.now();
+      const buffer = await captureFullScreen();
+      capMs = Date.now() - t;
+      return buffer;
+    })(),
+  ]);
+
+  const transcript = sttResult.text;
+  console.log(`[Voice] Transcript: "${transcript}"`);
+  console.log(`[PERF] stt: ${sttMs}ms  (${audioBuffer.length} bytes → ${transcript.length} chars)`);
+  console.log(`[PERF] capture: ${capMs}ms  (${screenshotBuffer.length} bytes)`);
 
   if (!transcript) {
     throw new Error('Empty transcript — no speech detected.');
   }
 
-  // ── Step 2: Screen capture ───────────────────────────────────────────────
-  setVoiceState('capturing');
-  console.log('[Voice] [2/4] Capturing screen…');
-
-  const screenshotBuffer = await captureFullScreen();
-  console.log(`[Voice] Screenshot: ${screenshotBuffer.length} bytes`);
-
   // ── Step 3: LLM guide ────────────────────────────────────────────────────
   setVoiceState('analyzing');
   console.log('[Voice] [3/4] Getting voice guide from LLM…');
 
+  const t_llm = Date.now();
   const guide = await getVoiceGuide(screenshotBuffer, transcript);
-  console.log(`[Voice] Guide: confidence=${guide.overall_confidence}, steps=${guide.steps.length}`);
+  const llmMs = Date.now() - t_llm;
+
+  console.log(`[PERF] llm: ${llmMs}ms  (confidence=${guide.overall_confidence}, steps=${guide.steps.length})`);
 
   // ── Step 4: Open guide window ────────────────────────────────────────────
   setVoiceState('showing_result');
   console.log('[Voice] [4/4] Opening guide window…');
 
-  // Close HUD once guide is ready
   if (voiceHudWindow && !voiceHudWindow.isDestroyed()) {
     voiceHudWindow.destroy();
     voiceHudWindow = null;
   }
 
+  const t_guide = Date.now();
   const screenshotDataUrl = `data:image/png;base64,${screenshotBuffer.toString('base64')}`;
   openGuideWindow({ ...guide, screenshotDataUrl });
+  const guideMs = Date.now() - t_guide;
+
+  console.log(`[PERF] guide-open: ${guideMs}ms`);
 
   // ── Step 5: TTS (non-blocking — guide shows regardless) ──────────────────
   console.log('[Voice] Starting TTS for spoken summary…');
@@ -541,19 +576,55 @@ async function runVoicePipeline(audioBase64, mimeType) {
     setVoiceState('showing_result');
   });
 
-  const total = Date.now() - t0;
-  console.log(`[Voice] Full pipeline complete in ${total}ms`);
+  const pipelineMs  = Date.now() - t0;
+  const hotToGuideMs = _voicePerfOrigin ? Date.now() - _voicePerfOrigin : pipelineMs;
+
+  // ── Summary log (easy to grep for /latency_report) ───────────────────────
+  console.log(
+    `[PERF] pipeline-summary  stt=${sttMs}ms  capture=${capMs}ms  llm=${llmMs}ms` +
+    `  guide-open=${guideMs}ms  subtotal=${pipelineMs}ms  hotkey→guide=${hotToGuideMs}ms`
+  );
+  console.log(`[Voice] Full pipeline complete in ${pipelineMs}ms`);
 }
 
 async function runTTS(text) {
-  const { audioBuffer, mimeType } = await synthesizeSpeech(text);
-  console.log(`[Voice] TTS audio: ${audioBuffer.length} bytes`);
+  _guideAudioReady     = false;
+  _guideTtsBuffer      = [];
+  _guideTtsStreamEnded = false;
 
-  if (guideWindow && !guideWindow.isDestroyed()) {
-    guideWindow.webContents.send('guide:play-audio', {
-      audioBase64: audioBuffer.toString('base64'),
-      mimeType,
+  const t_tts = Date.now();
+  let firstChunkLoggedMs = null;
+  let totalBytes = 0;
+
+  try {
+    await streamSpeech(text, (chunk) => {
+      totalBytes += chunk.length;
+
+      if (!firstChunkLoggedMs) {
+        firstChunkLoggedMs = Date.now() - t_tts;
+        console.log(`[PERF] tts-first-chunk: ${firstChunkLoggedMs}ms  (latency to first audio byte)`);
+      }
+
+      const chunkBase64 = chunk.toString('base64');
+
+      if (_guideAudioReady && guideWindow && !guideWindow.isDestroyed()) {
+        guideWindow.webContents.send('guide:tts-chunk', { chunkBase64 });
+      } else {
+        _guideTtsBuffer.push(chunkBase64);
+      }
     });
+
+    _guideTtsStreamEnded = true;
+    const ttsMs      = Date.now() - t_tts;
+    const wallClockMs = _voicePerfOrigin ? Date.now() - _voicePerfOrigin : 0;
+    console.log(`[PERF] tts: ${ttsMs}ms  (${text.length} chars, ${totalBytes} bytes streamed)`);
+    console.log(`[PERF] wall-clock: ${wallClockMs}ms  (hotkey → TTS stream complete)`);
+
+    if (_guideAudioReady && guideWindow && !guideWindow.isDestroyed()) {
+      guideWindow.webContents.send('guide:tts-end');
+    }
+  } catch (err) {
+    console.warn('[Voice] TTS stream failed (non-fatal):', err.message);
   }
 
   setVoiceState('showing_result');
@@ -594,6 +665,17 @@ function openGuideWindow(data) {
     guideWindow.show();
     guideWindow.focus();
     guideWindow.webContents.send('guide:init', data);
+
+    // Flush any TTS chunks that arrived while the window was loading.
+    _guideAudioReady = true;
+    for (const chunkBase64 of _guideTtsBuffer) {
+      guideWindow.webContents.send('guide:tts-chunk', { chunkBase64 });
+    }
+    _guideTtsBuffer = [];
+
+    if (_guideTtsStreamEnded) {
+      guideWindow.webContents.send('guide:tts-end');
+    }
   });
 
   guideWindow.on('closed', () => {

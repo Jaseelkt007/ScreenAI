@@ -98,9 +98,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onGuideInit: (cb) =>
     ipcRenderer.on('guide:init', (_e, data) => cb(data)),
 
-  /** Listen for audio playback data */
+  /** Listen for audio playback data (full buffer, legacy) */
   onGuidePlayAudio: (cb) =>
     ipcRenderer.on('guide:play-audio', (_e, data) => cb(data)),
+
+  /** Listen for a streaming TTS audio chunk */
+  onGuideTtsChunk: (cb) =>
+    ipcRenderer.on('guide:tts-chunk', (_e, data) => cb(data)),
+
+  /** Listen for TTS stream end signal */
+  onGuideTtsEnd: (cb) =>
+    ipcRenderer.on('guide:tts-end', () => cb()),
 
   /** Listen for guide errors */
   onGuideError: (cb) =>

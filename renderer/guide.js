@@ -26,35 +26,31 @@ const closeBtn           = document.getElementById('close-btn');
 
 let currentAudioUrl  = null;
 let currentAudio     = null;
-let lastAudioBase64  = null;
-let lastAudioMime    = null;
+let replayBlobUrl    = null; // object URL built from all received chunks for replay
+
+// ── TTS streaming state ─────────────────────────────────────────────────────
+let _mediaSource   = null;
+let _sourceBuffer  = null;
+let _chunkQueue    = []; // ArrayBuffers waiting to be appended
+let _isAppending   = false;
+let _streamEnded   = false;
+let _replayChunks  = []; // raw Uint8Arrays collected for replay
 
 // ── Close ──────────────────────────────────────────────────────────────────
 
-closeBtn.addEventListener('click', () => {
+function closeGuide() {
   stopAudio();
+  if (replayBlobUrl) { URL.revokeObjectURL(replayBlobUrl); replayBlobUrl = null; }
   window.electronAPI.sendGuideClose();
-});
+}
+
+closeBtn.addEventListener('click', closeGuide);
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    stopAudio();
-    window.electronAPI.sendGuideClose();
-  }
+  if (e.key === 'Escape') closeGuide();
 });
 
 // ── Audio playback ─────────────────────────────────────────────────────────
-
-function playAudio(base64, mimeType) {
-  stopAudio();
-
-  const blob = base64ToBlob(base64, mimeType);
-  currentAudioUrl = URL.createObjectURL(blob);
-  currentAudio = new Audio(currentAudioUrl);
-  currentAudio.play().catch((err) => {
-    console.warn('[Guide] Audio playback failed:', err.message);
-  });
-}
 
 function stopAudio() {
   if (currentAudio) {
@@ -65,19 +61,102 @@ function stopAudio() {
     URL.revokeObjectURL(currentAudioUrl);
     currentAudioUrl = null;
   }
+  // Reset streaming state
+  _mediaSource  = null;
+  _sourceBuffer = null;
+  _chunkQueue   = [];
+  _isAppending  = false;
+  _streamEnded  = false;
 }
 
-function base64ToBlob(base64, mimeType) {
-  const bytes = atob(base64);
-  const arr   = new Uint8Array(bytes.length);
-  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-  return new Blob([arr], { type: mimeType });
+// Start a MediaSource-backed audio element for streaming playback.
+function startStreamingAudio() {
+  stopAudio();
+  _replayChunks = [];
+  _streamEnded  = false;
+
+  _mediaSource = new MediaSource();
+  currentAudioUrl = URL.createObjectURL(_mediaSource);
+  currentAudio = new Audio(currentAudioUrl);
+
+  _mediaSource.addEventListener('sourceopen', () => {
+    _sourceBuffer = _mediaSource.addSourceBuffer('audio/mpeg');
+    _sourceBuffer.addEventListener('updateend', () => {
+      _isAppending = false;
+      flushChunkQueue();
+    });
+    flushChunkQueue(); // drain any chunks that arrived before sourceopen
+  });
+
+  currentAudio.play().catch((err) => {
+    console.warn('[Guide] TTS stream play failed:', err.message);
+  });
+}
+
+function flushChunkQueue() {
+  if (_isAppending || !_sourceBuffer) return;
+
+  if (_chunkQueue.length > 0) {
+    _isAppending = true;
+    _sourceBuffer.appendBuffer(_chunkQueue.shift());
+    return;
+  }
+
+  // Queue empty — if stream is done, close the source.
+  if (_streamEnded && _mediaSource && _mediaSource.readyState === 'open') {
+    _mediaSource.endOfStream();
+    buildReplayBlob();
+  }
+}
+
+function appendTtsChunk(chunkBase64) {
+  const bytes = Uint8Array.from(atob(chunkBase64), (c) => c.charCodeAt(0));
+  _replayChunks.push(bytes);
+  _chunkQueue.push(bytes.buffer);
+
+  if (!_mediaSource) {
+    startStreamingAudio();
+  } else {
+    flushChunkQueue();
+  }
+}
+
+function onTtsStreamEnd() {
+  _streamEnded = true;
+  flushChunkQueue(); // may trigger endOfStream immediately if queue is empty
+}
+
+function buildReplayBlob() {
+  if (_replayChunks.length === 0) return;
+  const blob = new Blob(_replayChunks.map((c) => c.buffer), { type: 'audio/mpeg' });
+  if (replayBlobUrl) URL.revokeObjectURL(replayBlobUrl);
+  replayBlobUrl = URL.createObjectURL(blob);
+  replayBtn.classList.remove('hidden');
+}
+
+// Legacy: full-buffer playback (kept for fallback / synthesizeSpeech path)
+function playAudio(base64, mimeType) {
+  stopAudio();
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  const blob  = new Blob([bytes.buffer], { type: mimeType });
+  if (replayBlobUrl) URL.revokeObjectURL(replayBlobUrl);
+  replayBlobUrl   = URL.createObjectURL(blob);
+  currentAudioUrl = URL.createObjectURL(blob);
+  currentAudio    = new Audio(currentAudioUrl);
+  currentAudio.play().catch((err) => {
+    console.warn('[Guide] Audio playback failed:', err.message);
+  });
+  replayBtn.classList.remove('hidden');
 }
 
 replayBtn.addEventListener('click', () => {
-  if (lastAudioBase64) {
-    playAudio(lastAudioBase64, lastAudioMime);
-  }
+  if (!replayBlobUrl) return;
+  stopAudio();
+  currentAudioUrl = replayBlobUrl; // keep blob alive — don't revoke on stopAudio
+  currentAudio    = new Audio(replayBlobUrl);
+  currentAudio.play().catch((err) => {
+    console.warn('[Guide] Replay failed:', err.message);
+  });
 });
 
 // ── Guide rendering ────────────────────────────────────────────────────────
@@ -182,10 +261,17 @@ window.electronAPI.onGuideInit((data) => {
   renderGuide(data);
 });
 
+// Streaming TTS (primary path)
+window.electronAPI.onGuideTtsChunk((data) => {
+  appendTtsChunk(data.chunkBase64);
+});
+
+window.electronAPI.onGuideTtsEnd(() => {
+  onTtsStreamEnd();
+});
+
+// Legacy full-buffer path (fallback)
 window.electronAPI.onGuidePlayAudio((data) => {
-  replayBtn.classList.remove('hidden');
-  lastAudioBase64 = data.audioBase64;
-  lastAudioMime   = data.mimeType;
   playAudio(data.audioBase64, data.mimeType);
 });
 

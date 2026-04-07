@@ -11,6 +11,7 @@
  */
 
 const fetch    = require('node-fetch');
+const Jimp     = require('jimp');
 const settings = require('./settings');
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -19,6 +20,19 @@ const OPENAI_API_BASE = 'https://api.openai.com/v1';
 // Models that start with these prefixes go to OpenAI
 function isOpenAIModel(model) {
   return /^(gpt-|o1|o3|o4)/.test(model);
+}
+
+// Model used exclusively for the voice guide (structured JSON + spoken_summary).
+// Kept separate from the user-selected model so the overlay Q&A and voice guide
+// can use different models independently.
+const VOICE_GUIDE_MODEL = 'gemini-2.5-flash';
+
+// Compress a PNG buffer to JPEG to reduce bytes sent to the vision LLM.
+// Quality 75 cuts a ~1MB PNG to ~150–250KB with negligible visual loss.
+async function compressToJpeg(pngBuffer, quality = 75) {
+  const image = await Jimp.read(pngBuffer);
+  image.quality(quality);
+  return image.getBufferAsync(Jimp.MIME_JPEG);
 }
 
 // ─── Main export ───────────────────────────────────────────────────────────
@@ -268,15 +282,20 @@ Rules for steps and other fields:
  * @returns {Promise<object>}   - Validated guide object.
  */
 async function getVoiceGuide(imageBuffer, transcript) {
-  const model = settings.getModel();
+  const model = VOICE_GUIDE_MODEL;
   console.log(`[LLM] Voice guide → ${model}, transcript: "${transcript.slice(0, 60)}"`);
   const t0 = Date.now();
 
+  // Compress PNG → JPEG before sending to cut LLM processing time.
+  const t_compress = Date.now();
+  const jpegBuffer = await compressToJpeg(imageBuffer);
+  console.log(`[LLM] Screenshot compressed: ${imageBuffer.length}b PNG → ${jpegBuffer.length}b JPEG (${Date.now() - t_compress}ms)`);
+
   let raw;
   if (isOpenAIModel(model)) {
-    raw = await fetchVoiceGuideOpenAI(imageBuffer, transcript, model);
+    raw = await fetchVoiceGuideOpenAI(jpegBuffer, transcript, model);
   } else {
-    raw = await fetchVoiceGuideGemini(imageBuffer, transcript, model);
+    raw = await fetchVoiceGuideGemini(jpegBuffer, transcript, model);
   }
 
   const guide = parseAndValidateGuide(raw, transcript);
@@ -295,7 +314,7 @@ async function fetchVoiceGuideGemini(imageBuffer, transcript, model) {
     contents: [{
       role: 'user',
       parts: [
-        { inline_data: { mime_type: 'image/png', data: imageBuffer.toString('base64') } },
+        { inline_data: { mime_type: 'image/jpeg', data: imageBuffer.toString('base64') } },
         { text: `User question: ${transcript}` },
       ],
     }],
@@ -339,7 +358,7 @@ async function fetchVoiceGuideOpenAI(imageBuffer, transcript, model) {
     {
       role: 'user',
       content: [
-        { type: 'image_url', image_url: { url: `data:image/png;base64,${imageBase64}`, detail: 'auto' } },
+        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: 'auto' } },
         { type: 'text', text: `User question: ${transcript}` },
       ],
     },
