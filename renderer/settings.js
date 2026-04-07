@@ -50,14 +50,14 @@ window.electronAPI.settingsGet().then((s) => {
 
   // Capture hotkey
   currentHotkey = s.customHotkey || '';
-  hotkeyDisplay.textContent = currentHotkey || 'F7 (Default)';
+  hotkeyDisplay.textContent = currentHotkey || 'F7';
 
   // Voice settings
   voiceEnabledCheckbox.checked = s.voiceEnabled === true;
   elevenlabsKeyInput.value     = s.elevenlabsApiKey || '';
   voiceIdInput.value           = s.voiceId || 'JBFqnCBsd6RMkjVDRZzb';
   currentVoiceHotkey           = s.voiceHotkey || '';
-  voiceHotkeyDisplay.textContent = currentVoiceHotkey || 'F8 (Default)';
+  voiceHotkeyDisplay.textContent = currentVoiceHotkey || 'F8';
   updateVoiceSettingsVisibility();
 });
 
@@ -114,7 +114,7 @@ recordHotkeyBtn.addEventListener('click', () => {
 
 resetHotkeyBtn.addEventListener('click', () => {
   currentHotkey = '';
-  hotkeyDisplay.textContent = 'F7 (Default)';
+  hotkeyDisplay.textContent = 'F7';
   hotkeyDisplay.classList.remove('recording');
   stopRecording();
 });
@@ -122,14 +122,14 @@ resetHotkeyBtn.addEventListener('click', () => {
 function startRecording() {
   if (recordingVoiceHotkey) stopVoiceHotkeyRecording();
   recordingHotkey = true;
-  recordHotkeyBtn.textContent = 'Cancel';
-  hotkeyDisplay.textContent   = 'Press a key combo…';
+  recordHotkeyBtn.textContent = 'CANCEL';
+  hotkeyDisplay.textContent   = 'PRESS KEY…';
   hotkeyDisplay.classList.add('recording');
 }
 
 function stopRecording() {
   recordingHotkey = false;
-  recordHotkeyBtn.textContent = 'Change';
+  recordHotkeyBtn.textContent = 'BIND';
   hotkeyDisplay.classList.remove('recording');
 }
 
@@ -141,7 +141,7 @@ recordVoiceHotkeyBtn.addEventListener('click', () => {
 
 resetVoiceHotkeyBtn.addEventListener('click', () => {
   currentVoiceHotkey = '';
-  voiceHotkeyDisplay.textContent = 'F8 (Default)';
+  voiceHotkeyDisplay.textContent = 'F8';
   voiceHotkeyDisplay.classList.remove('recording');
   stopVoiceHotkeyRecording();
 });
@@ -149,14 +149,14 @@ resetVoiceHotkeyBtn.addEventListener('click', () => {
 function startVoiceHotkeyRecording() {
   if (recordingHotkey) stopRecording();
   recordingVoiceHotkey = true;
-  recordVoiceHotkeyBtn.textContent = 'Cancel';
-  voiceHotkeyDisplay.textContent   = 'Press a key combo…';
+  recordVoiceHotkeyBtn.textContent = 'CANCEL';
+  voiceHotkeyDisplay.textContent   = 'PRESS KEY…';
   voiceHotkeyDisplay.classList.add('recording');
 }
 
 function stopVoiceHotkeyRecording() {
   recordingVoiceHotkey = false;
-  recordVoiceHotkeyBtn.textContent = 'Change';
+  recordVoiceHotkeyBtn.textContent = 'BIND';
   voiceHotkeyDisplay.classList.remove('recording');
 }
 
@@ -251,7 +251,7 @@ saveBtn.addEventListener('click', async () => {
   } else {
     showStatus(`Error saving settings: ${result.error}`, 'error');
     saveBtn.disabled    = false;
-    saveBtn.textContent = 'Save & Close';
+    saveBtn.textContent = 'SAVE & CLOSE';
   }
 });
 

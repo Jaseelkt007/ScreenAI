@@ -1,0 +1,155 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-and-build:
+    name: Quality and Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      CI: true
+      CSC_IDENTITY_AUTO_DISCOVERY: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js (LTS)
+        id: setup-node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Cache npm cache (Linux/macOS)
+        if: runner.os != 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ steps.setup-node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-${{ steps.setup-node.outputs.node-version }}-
+            ${{ runner.os }}-npm-
+
+      - name: Cache npm cache (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\npm-cache
+          key: ${{ runner.os }}-npm-${{ steps.setup-node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-${{ steps.setup-node.outputs.node-version }}-
+            ${{ runner.os }}-npm-
+
+      - name: Cache Electron binaries (Linux/macOS)
+        if: runner.os != 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Cache Electron binaries (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Detect configured quality scripts
+        id: detect
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const pkg = require('./package.json');
+          const scripts = pkg.scripts || {};
+
+          const hasOwn = (name) => Object.prototype.hasOwnProperty.call(scripts, name);
+          const formatCandidates = ['format:check', 'prettier:check', 'check-format'];
+          const formatScript =
+            formatCandidates.find((name) => hasOwn(name)) ||
+            (hasOwn('format') && /--check/.test(scripts.format) ? 'format' : '');
+          const lintScript = hasOwn('lint') ? 'lint' : '';
+          const testScript = hasOwn('test') && !/no test specified/.test(scripts.test) ? 'test' : '';
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `lint=${lintScript}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `format=${formatScript}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `test=${testScript}\n`);
+          NODE
+
+      - name: Run lint
+        if: steps.detect.outputs.lint != ''
+        run: npm run ${{ steps.detect.outputs.lint }}
+
+      - name: Skip lint
+        if: steps.detect.outputs.lint == ''
+        run: echo "No lint script found in package.json; skipping."
+
+      - name: Run formatting check
+        if: steps.detect.outputs.format != ''
+        run: npm run ${{ steps.detect.outputs.format }}
+
+      - name: Skip formatting check
+        if: steps.detect.outputs.format == ''
+        run: echo "No formatting check script found in package.json; skipping."
+
+      - name: Run tests
+        if: steps.detect.outputs.test != ''
+        run: npm run ${{ steps.detect.outputs.test }}
+
+      - name: Skip tests
+        if: steps.detect.outputs.test == ''
+        run: echo "No test script found in package.json; skipping."
+
+      - name: Validate Electron build
+        run: |
+          case "$RUNNER_OS" in
+            Linux)
+              npm run prebuild
+              npx electron-builder --linux dir --publish never
+              ;;
+            Windows)
+              npm run build:win -- --publish never
+              ;;
+            macOS)
+              npm run build:mac -- --publish never
+              ;;
+            *)
+              echo "Unsupported runner OS: $RUNNER_OS" >&2
+              exit 1
+              ;;
+          esac
