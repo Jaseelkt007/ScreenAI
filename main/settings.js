@@ -58,7 +58,7 @@ function getDefaults() {
     elevenlabsApiKey:    '',
     voiceEnabled:        false,
     voiceHotkey:         '',
-    voiceId:             'JBFqnCBsd6RMkjVDRZzb', // ElevenLabs default "George"
+    voiceId:             'onwK4e9ZLuTAKqWW03F9', // ElevenLabs "Daniel" — deep, authoritative
     maxVoiceDurationMs:  20000,
     preferredSttLanguage: '',
   };

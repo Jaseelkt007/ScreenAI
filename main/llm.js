@@ -222,32 +222,42 @@ function buildOpenAIMessages(imageBuffer, prompt, history = []) {
 // ─── Voice Guide (structured output) ──────────────────────────────────────
 
 const VOICE_GUIDE_SYSTEM_PROMPT = `You are a screen-aware assistant. The user has sent you a screenshot and a spoken question.
-Your task is to provide a concise, actionable step-by-step guide to answer the question.
+Your task is to produce two things: a concise written guide (for the screen), and a natural spoken answer (for text-to-speech).
 
 Respond ONLY with a valid JSON object matching this exact schema — no markdown, no extra text:
 {
-  "spoken_summary": "<1-2 sentences spoken aloud — short, natural, helpful>",
-  "summary": "<1 sentence written summary>",
+  "summary": "<1 sentence written summary of what the screen shows or what to do>",
   "steps": [
     {
       "id": 1,
       "title": "<short step title>",
-      "instruction": "<clear instruction for this step>",
+      "instruction": "<clear written instruction for this step>",
       "target": { "x": 0.0, "y": 0.0, "w": 0.0, "h": 0.0 } | null,
       "confidence": 0.0
     }
   ],
   "overall_confidence": 0.0,
-  "needs_user_confirmation": false
+  "needs_user_confirmation": false,
+  "spoken_summary": "<see rules below — generate this LAST>"
 }
 
-Rules:
+Rules for spoken_summary (this is read aloud by a text-to-speech voice — generate it LAST):
+- STRICT LENGTH: maximum 2 sentences, maximum 50 words total. Be concise.
+- Write exactly how you would SPEAK this answer out loud, not how you'd write it.
+- Use contractions: you'll, it's, there's, that's, you've.
+- Use natural spoken connectors: so, then, from there, basically, just.
+- Start with a casual opener: "Sure, ...", "Alright, ...", "So ...", "Looks like ...", "Yeah, ...".
+- Never use step numbers, markdown, bullet points, or formal written language.
+- Cover the core answer only — the screen shows the full steps.
+- If describing the screen: "you've got a terminal open", "looks like the settings panel is up".
+- If giving instructions: "just head into Settings and find Notifications — flip that switch off".
+
+Rules for steps and other fields:
 - Maximum 3 steps.
-- spoken_summary must be ≤ 2 short sentences, conversational, no step numbers.
 - All target coordinates must be normalized 0..1 relative to the screenshot width/height.
 - If you cannot locate a UI element precisely, set target to null.
 - overall_confidence and step confidence must be 0..1 floats.
-- If the question cannot be answered from the screenshot, set overall_confidence below 0.4 and explain in spoken_summary.
+- If the question cannot be answered from the screenshot, set overall_confidence below 0.4 and explain naturally in spoken_summary.
 - Never invent precise coordinates you cannot see in the image.`;
 
 /**
@@ -291,7 +301,7 @@ async function fetchVoiceGuideGemini(imageBuffer, transcript, model) {
     }],
     generationConfig: {
       temperature:      0.2,
-      maxOutputTokens:  2048,
+      maxOutputTokens:  4096,
       responseMimeType: 'application/json',
     },
     safetySettings: [
@@ -361,21 +371,35 @@ async function fetchVoiceGuideOpenAI(imageBuffer, transcript, model) {
 
 function parseAndValidateGuide(raw, transcript) {
   let parsed;
+  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+
   try {
-    // Strip possible markdown code fences
-    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
     parsed = JSON.parse(cleaned);
   } catch (err) {
-    console.warn('[LLM] Failed to parse guide JSON, using fallback:', err.message);
-    console.warn('[LLM] Raw response (first 500 chars):', raw.slice(0, 500));
-    return {
-      transcript,
-      spoken_summary:          'I had trouble understanding the screen. Please try again.',
-      summary:                 'Could not generate a guide.',
-      steps:                   [],
-      overall_confidence:      0,
-      needs_user_confirmation: true,
-    };
+    console.warn('[LLM] Full JSON parse failed:', err.message);
+    console.warn('[LLM] Raw response (first 600 chars):', raw.slice(0, 600));
+
+    // Partial recovery: the response is truncated (spoken_summary is last and got cut off).
+    // Try to close the JSON and re-parse so we still get summary + steps.
+    try {
+      // Close open string, object, array, and outer object
+      const patched = cleaned
+        .replace(/,\s*"spoken_summary"\s*:.*$/s, '')  // drop incomplete spoken_summary
+        .replace(/,?\s*$/, '')                         // trim trailing comma
+        + '}';
+      parsed = JSON.parse(patched);
+      console.warn('[LLM] Partial JSON recovery succeeded — spoken_summary dropped');
+    } catch {
+      // Full fallback
+      return {
+        transcript,
+        spoken_summary:          'I had trouble understanding the screen. Please try again.',
+        summary:                 'Could not generate a guide.',
+        steps:                   [],
+        overall_confidence:      0,
+        needs_user_confirmation: true,
+      };
+    }
   }
 
   // Normalize and clamp

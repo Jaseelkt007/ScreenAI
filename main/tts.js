@@ -32,7 +32,7 @@ async function synthesizeSpeech(text, opts = {}) {
     throw new Error('Cannot synthesize empty text.');
   }
 
-  const voiceId = opts.voiceId || settings.getSetting('voiceId', 'JBFqnCBsd6RMkjVDRZzb');
+  const voiceId = opts.voiceId || settings.getSetting('voiceId', 'onwK4e9ZLuTAKqWW03F9');
   const url = `${TTS_BASE}/${voiceId}`;
 
   console.log(`[TTS] Synthesizing ${text.length} chars with voice ${voiceId}`);

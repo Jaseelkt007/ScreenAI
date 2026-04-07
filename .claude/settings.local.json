@@ -17,7 +17,10 @@
       "Read(//mnt/c/Users/**)",
       "Bash(find:*)",
       "Bash(cat:*)",
-      "Bash(grep -E \"\\(package\\\\.json|\\\\.js$\\)\")"
+      "Bash(grep -E \"\\(package\\\\.json|\\\\.js$\\)\")",
+      "WebFetch(domain:elevenlabs.io)",
+      "WebSearch",
+      "WebFetch(domain:api.elevenlabs.io)"
     ]
   }
 }

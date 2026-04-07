@@ -24,8 +24,10 @@ const screenshotWrap     = document.getElementById('screenshot-wrap');
 const replayBtn          = document.getElementById('replay-btn');
 const closeBtn           = document.getElementById('close-btn');
 
-let currentAudioUrl = null;
-let currentAudio    = null;
+let currentAudioUrl  = null;
+let currentAudio     = null;
+let lastAudioBase64  = null;
+let lastAudioMime    = null;
 
 // ── Close ──────────────────────────────────────────────────────────────────
 
@@ -73,13 +75,8 @@ function base64ToBlob(base64, mimeType) {
 }
 
 replayBtn.addEventListener('click', () => {
-  if (currentAudioUrl) {
-    stopAudio();
-    // Re-trigger from the stored data — main will re-send on replay request
-    // For now replay from the same blob URL stored at render time
-    const audio = new Audio(currentAudioUrl);
-    audio.play().catch(() => {});
-    currentAudio = audio;
+  if (lastAudioBase64) {
+    playAudio(lastAudioBase64, lastAudioMime);
   }
 });
 
@@ -187,11 +184,9 @@ window.electronAPI.onGuideInit((data) => {
 
 window.electronAPI.onGuidePlayAudio((data) => {
   replayBtn.classList.remove('hidden');
+  lastAudioBase64 = data.audioBase64;
+  lastAudioMime   = data.mimeType;
   playAudio(data.audioBase64, data.mimeType);
-
-  // Store for replay: re-create blob url after play
-  const blob = base64ToBlob(data.audioBase64, data.mimeType);
-  currentAudioUrl = URL.createObjectURL(blob);
 });
 
 window.electronAPI.onGuideError((data) => {
