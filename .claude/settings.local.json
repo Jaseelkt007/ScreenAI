@@ -20,7 +20,10 @@
       "Bash(grep -E \"\\(package\\\\.json|\\\\.js$\\)\")",
       "WebFetch(domain:elevenlabs.io)",
       "WebSearch",
-      "WebFetch(domain:api.elevenlabs.io)"
+      "WebFetch(domain:api.elevenlabs.io)",
+      "Bash(gh repo:*)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

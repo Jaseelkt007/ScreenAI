@@ -212,6 +212,97 @@
         </div>
       </div>
 
+      <!-- ─── AGENT BANNER ──────────────────────────────── -->
+      <div class="jarvis-banner" style="margin-top:14px;">
+        <div class="jb-line" style="background:rgba(245,158,11,0.3)"></div>
+        <div class="jb-core">
+          <div class="jb-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
+                    stroke="#f59e0b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <span class="jb-text" style="color:#f59e0b;">A · G · E · N · T</span>
+        </div>
+        <div class="jb-line" style="background:rgba(245,158,11,0.3)"></div>
+      </div>
+
+      <!-- ─── CARD: AGENT SUBSYSTEM ─────────────────────── -->
+      <div class="card" id="agent-card" style="--card-accent:#f59e0b;">
+        <div class="card-corner tl" style="border-color:rgba(245,158,11,0.4)"></div>
+        <div class="card-corner br" style="border-color:rgba(245,158,11,0.4)"></div>
+        <div class="card-stripe" style="background:rgba(245,158,11,0.06)"></div>
+        <div class="card-tag" style="color:#f59e0b;border-color:rgba(245,158,11,0.25)">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
+                  stroke="#f59e0b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          AGENT SUBSYSTEM
+        </div>
+
+        <!-- Enable toggle -->
+        <div class="field">
+          <label class="toggle-wrap" for="agent-enabled-checkbox">
+            <input type="checkbox" id="agent-enabled-checkbox" class="t-input" style="--thumb-color:#f59e0b"/>
+            <span class="t-track" style="--track-on:rgba(245,158,11,0.35)"><span class="t-thumb" style="--thumb-on:#f59e0b"></span></span>
+            <span class="t-label" style="color:#f59e0b">ACTIVATE AGENT MODE</span>
+          </label>
+          <div class="hint">Complex voice queries use the agent, while simple screen-description requests use a faster vision path</div>
+        </div>
+
+        <div id="agent-settings-section">
+          <div class="inner-sep"></div>
+
+          <!-- Backend selector -->
+          <div class="field">
+            <div class="field-label" style="color:#f59e0b">AGENT BACKEND</div>
+            <select id="agent-backend-select">
+              <option value="codex">Codex — OpenAI CLI (default)</option>
+              <option value="vibe">Vibe — Mistral CLI (free tier)</option>
+            </select>
+          </div>
+
+          <!-- Codex section -->
+          <div id="codex-section">
+            <div class="field">
+              <div class="field-label" style="color:#f59e0b">CODEX AUTHORIZATION</div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <button id="codex-check-btn" class="ghost-btn">CHECK</button>
+                <button id="codex-install-btn" class="ghost-btn">INSTALL</button>
+                <button id="codex-auth-btn" class="ghost-btn" style="color:#f59e0b;border-color:rgba(245,158,11,0.35)">AUTHORIZE VIA CHATGPT</button>
+                <span id="codex-status" class="hint" style="margin:0"></span>
+              </div>
+              <div class="hint">Codex uses your ChatGPT account. On Windows, hidden agent runs prefer WSL because native Windows support is still experimental. Run <strong>codex login</strong> once to sign in.</div>
+            </div>
+          </div>
+
+          <!-- Vibe section -->
+          <div id="vibe-section" class="hidden">
+            <div class="field">
+              <div class="field-label" style="color:#f59e0b">MISTRAL API KEY</div>
+              <div class="input-row">
+                <input type="password" id="mistral-key-input" placeholder="..." autocomplete="off" spellcheck="false"/>
+                <button id="toggle-mistral-visibility" class="icon-btn" title="Show / hide key">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>
+                  </svg>
+                </button>
+              </div>
+              <div class="hint">Free tier available at <span class="link" id="mistral-link">console.mistral.ai</span></div>
+            </div>
+            <div class="field">
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <button id="vibe-check-btn" class="ghost-btn">CHECK</button>
+                <button id="vibe-install-btn" class="ghost-btn">INSTALL</button>
+              </div>
+              <span id="vibe-status" class="hint" style="margin-top:6px;display:block"></span>
+            </div>
+          </div>
+
+        </div><!-- /agent-settings-section -->
+      </div>
+
     </div><!-- /scroll-body -->
 
     <!-- ═══ STATUS ════════════════════════════════════════════════ -->

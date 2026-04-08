@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:;" />
+  <title>JARVIS</title>
+  <link rel="stylesheet" href="agent-hud.css" />
+</head>
+<body>
+  <div id="hud">
+    <div id="header">
+      <div id="agent-badge">
+        <span id="agent-mark">MARK VII</span>
+        <span id="agent-name">JARVIS</span>
+      </div>
+      <div id="phase-badge" class="phase-idle">STANDBY</div>
+      <button id="close-btn" title="Stop agent">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
+          <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+
+    <div id="hero">
+      <div id="hero-core" aria-hidden="true">
+        <div class="core-ring ring-outer"></div>
+        <div class="core-ring ring-mid"></div>
+        <div class="core-ring ring-inner"></div>
+        <div id="core-center"></div>
+      </div>
+      <div id="hero-copy">
+        <div id="hero-kicker">TACTICAL RESPONSE SYSTEM</div>
+        <div id="status-line">
+          <span id="status-dot"></span>
+          <span id="status-text">Standing by for the next request.</span>
+        </div>
+      </div>
+    </div>
+
+    <section class="panel" id="timeline-panel">
+      <div class="panel-header">
+        <div class="panel-label">Telemetry</div>
+        <div class="panel-meta">Live feed</div>
+      </div>
+      <div id="feed-wrap">
+        <div id="feed"></div>
+      </div>
+    </section>
+
+    <section id="response-panel" class="panel hidden">
+      <div class="panel-header">
+        <div id="response-label" class="panel-label">Briefing</div>
+        <button id="replay-btn" class="panel-action hidden" title="Replay spoken answer">Replay Voice</button>
+      </div>
+      <div id="response-text"></div>
+    </section>
+
+    <div id="footer">
+      <div id="voice-pill" class="voice-standby">
+        <div id="voice-bars" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <span id="tts-text">Voice standby</span>
+      </div>
+      <button id="stop-btn">Abort</button>
+    </div>
+  </div>
+  <script src="agent-hud.js"></script>
+</body>
+</html>

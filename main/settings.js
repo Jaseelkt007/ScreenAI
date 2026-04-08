@@ -61,6 +61,10 @@ function getDefaults() {
     voiceId:             'onwK4e9ZLuTAKqWW03F9', // ElevenLabs "Daniel" — deep, authoritative
     maxVoiceDurationMs:  20000,
     preferredSttLanguage: '',
+    // Agent Subsystem
+    agentEnabled:        false,
+    agentBackend:        'codex', // 'codex' | 'vibe'
+    mistralApiKey:       '',
   };
 }
 
@@ -105,4 +109,23 @@ function getElevenLabsKey() {
   return getSetting('elevenlabsApiKey', '') || process.env.ELEVENLABS_API_KEY || '';
 }
 
-module.exports = { loadSettings, saveSettings, getSetting, isFirstRun, getApiKey, getOpenAIKey, getModel, getElevenLabsKey };
+/** True if the agent subsystem is enabled. */
+function isAgentEnabled() {
+  return getSetting('agentEnabled', false) === true;
+}
+
+/** Get the active agent backend ('codex' | 'vibe'). */
+function getAgentBackend() {
+  return getSetting('agentBackend', 'codex');
+}
+
+/** Get Mistral API key (for Vibe). */
+function getMistralKey() {
+  return getSetting('mistralApiKey', '') || process.env.MISTRAL_API_KEY || '';
+}
+
+module.exports = {
+  loadSettings, saveSettings, getSetting,
+  isFirstRun, getApiKey, getOpenAIKey, getModel, getElevenLabsKey,
+  isAgentEnabled, getAgentBackend, getMistralKey,
+};

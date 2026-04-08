@@ -1,6 +1,24 @@
 'use strict';
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
+// Agent subsystem refs (declared up top so loadSettings can reference them)
+const agentEnabledCheckbox  = document.getElementById('agent-enabled-checkbox');
+const agentSettingsSection  = document.getElementById('agent-settings-section');
+const agentBackendSelect    = document.getElementById('agent-backend-select');
+const codexSection          = document.getElementById('codex-section');
+const vibeSection           = document.getElementById('vibe-section');
+const codexCheckBtn         = document.getElementById('codex-check-btn');
+const codexInstallBtn       = document.getElementById('codex-install-btn');
+const codexAuthBtn          = document.getElementById('codex-auth-btn');
+const codexStatus           = document.getElementById('codex-status');
+const vibeCheckBtn          = document.getElementById('vibe-check-btn');
+const vibeInstallBtn        = document.getElementById('vibe-install-btn');
+const vibeStatus            = document.getElementById('vibe-status');
+const mistralKeyInput       = document.getElementById('mistral-key-input');
+const toggleMistralVisBtn   = document.getElementById('toggle-mistral-visibility');
+const mistralLink           = document.getElementById('mistral-link');
+
+
 const apiKeyInput          = document.getElementById('api-key-input');
 const modelSelect          = document.getElementById('model-select');
 const openaiKeySection     = document.getElementById('openai-key-section');
@@ -59,6 +77,12 @@ window.electronAPI.settingsGet().then((s) => {
   currentVoiceHotkey           = s.voiceHotkey || '';
   voiceHotkeyDisplay.textContent = currentVoiceHotkey || 'F8';
   updateVoiceSettingsVisibility();
+
+  // Agent settings
+  agentEnabledCheckbox.checked = s.agentEnabled === true;
+  agentBackendSelect.value     = s.agentBackend || 'codex';
+  mistralKeyInput.value        = s.mistralApiKey || '';
+  updateAgentSections();
 });
 
 // ── Model dropdown → show/hide OpenAI key ─────────────────────────────────
@@ -243,6 +267,10 @@ saveBtn.addEventListener('click', async () => {
     elevenlabsApiKey: elevenlabsKeyInput.value.trim(),
     voiceHotkey:      currentVoiceHotkey,
     voiceId:          voiceIdInput.value.trim() || 'JBFqnCBsd6RMkjVDRZzb',
+    // Agent subsystem
+    agentEnabled:     agentEnabledCheckbox.checked,
+    agentBackend:     agentBackendSelect.value,
+    mistralApiKey:    mistralKeyInput.value.trim(),
   });
 
   if (result.ok) {
@@ -257,6 +285,88 @@ saveBtn.addEventListener('click', async () => {
 
 // ── Cancel ─────────────────────────────────────────────────────────────────
 cancelBtn.addEventListener('click', () => window.electronAPI.settingsClose());
+
+// ── Agent subsystem ────────────────────────────────────────────────────────
+
+agentEnabledCheckbox.addEventListener('change', updateAgentSections);
+agentBackendSelect.addEventListener('change', updateAgentSections);
+
+function updateAgentSections() {
+  agentSettingsSection.classList.toggle('hidden', !agentEnabledCheckbox.checked);
+  const isVibe = agentBackendSelect.value === 'vibe';
+  codexSection.classList.toggle('hidden', isVibe);
+  vibeSection.classList.toggle('hidden', !isVibe);
+}
+
+// Check Codex installation
+codexCheckBtn.addEventListener('click', async () => {
+  codexStatus.textContent = 'Checking…';
+  codexStatus.style.color = '';
+  const result = await window.electronAPI.agentCheck('codex');
+  if (result.installed) {
+    const runtime = result.runtime === 'wsl' ? 'WSL' : 'native';
+    const auth =
+      result.authenticated === true ? ' · Logged in'
+      : result.authenticated === false ? ' · Not signed in'
+      : '';
+    codexStatus.textContent =
+      `✓ Installed (${runtime})` +
+      (result.version ? ' · ' + result.version : '') +
+      auth;
+    codexStatus.style.color = '#86efac';
+  } else {
+    codexStatus.textContent = '✗ Not found — install Codex or use your WSL runtime';
+    codexStatus.style.color = '#fca5a5';
+  }
+});
+
+codexInstallBtn.addEventListener('click', async () => {
+  codexStatus.textContent = 'Opening install terminal…';
+  codexStatus.style.color = '#f59e0b';
+  await window.electronAPI.agentInstall('codex');
+});
+
+// Launch codex auth in a terminal / browser
+codexAuthBtn.addEventListener('click', async () => {
+  codexStatus.textContent = 'Opening browser for ChatGPT sign-in…';
+  codexStatus.style.color = '#f59e0b';
+  const result = await window.electronAPI.agentAuthCodex();
+  if (result && result.ok === false) {
+    codexStatus.textContent = `✗ ${result.error || 'Codex is not installed.'}`;
+    codexStatus.style.color = '#fca5a5';
+  }
+});
+
+// Check Vibe installation
+vibeCheckBtn.addEventListener('click', async () => {
+  vibeStatus.textContent = 'Checking…';
+  vibeStatus.style.color = '';
+  const result = await window.electronAPI.agentCheck('vibe');
+  if (result.installed) {
+    vibeStatus.textContent = '✓ Installed' + (result.version ? ' · ' + result.version : '');
+    vibeStatus.style.color = '#86efac';
+  } else {
+    vibeStatus.textContent = '✗ Not found — run: npm install -g @mistral-ai/vibe';
+    vibeStatus.style.color = '#fca5a5';
+  }
+});
+
+vibeInstallBtn.addEventListener('click', async () => {
+  vibeStatus.textContent = 'Opening install terminal…';
+  vibeStatus.style.color = '#f59e0b';
+  await window.electronAPI.agentInstall('vibe');
+});
+
+// Mistral key visibility toggle
+toggleMistralVisBtn.addEventListener('click', () => {
+  const isPassword = mistralKeyInput.type === 'password';
+  mistralKeyInput.type = isPassword ? 'text' : 'password';
+});
+
+// Mistral console link
+mistralLink.addEventListener('click', () => {
+  window.electronAPI.openExternal('https://console.mistral.ai');
+});
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function showStatus(msg, type) {

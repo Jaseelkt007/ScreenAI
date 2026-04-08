@@ -38,6 +38,8 @@ const {
   shell,
   nativeImage,
 } = require('electron');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const { registerHotkeys, reregisterHotkeys, unregisterHotkeys } = require('./hotkey');
@@ -46,10 +48,22 @@ const { streamLLM, getVoiceGuide }                             = require('./llm'
 const { transcribeAudio }                                       = require('./stt');
 const { synthesizeSpeech, streamSpeech }                        = require('./tts');
 const settingsStore                                             = require('./settings');
+const {
+  createRunner,
+  patchProcessPath,
+  preResolveCodexCmd,
+  checkAgentInstallation,
+  resolveCodexCommand,
+} = require('./agent-runner');
+const { Narrator }                                              = require('./narrator');
 
 const APP_ICON = nativeImage.createFromPath(
   path.join(__dirname, '../assets/icons/icon.png')
 );
+
+// Voice replies in guide / HUD windows start without a direct user click, so
+// Chromium needs autoplay permission for media playback.
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 // ─── Window references ─────────────────────────────────────────────────────
 let backgroundWindow = null;
@@ -58,6 +72,12 @@ let overlayWindow    = null;
 let settingsWindow   = null;
 let voiceHudWindow   = null;
 let guideWindow      = null;
+let agentHudWindow   = null;
+
+// ─── Active agent runner ───────────────────────────────────────────────────
+let _activeRunner  = null;
+let _narrator      = null;
+let _activeAgentScratchDir = null;
 
 // In-flight screenshot buffers
 let fullScreenBuffer = null;
@@ -79,6 +99,8 @@ let _recordingStartedAt = 0; // absolute ms timestamp when MediaRecorder started
 let _guideAudioReady    = false;
 let _guideTtsBuffer     = []; // array of base64 strings
 let _guideTtsStreamEnded = false;
+let _agentPrewarmScreenshot = null;
+let _agentPrewarmCapturePromise = null;
 
 function setVoiceState(state, message) {
   voiceState = state;
@@ -88,10 +110,61 @@ function setVoiceState(state, message) {
   }
 }
 
+function prewarmAgentRuntime() {
+  if (!settingsStore.isAgentEnabled()) return;
+
+  if (settingsStore.getAgentBackend() === 'codex') {
+    preResolveCodexCmd();
+  }
+
+  if (_agentPrewarmScreenshot || _agentPrewarmCapturePromise) return;
+
+  console.log('[Agent] Pre-warming screenshot capture…');
+  _agentPrewarmCapturePromise = captureFullScreen()
+    .then((buffer) => {
+      _agentPrewarmScreenshot = buffer;
+      console.log(`[Agent] Pre-warm screenshot ready: ${buffer.length} bytes`);
+      return buffer;
+    })
+    .catch((err) => {
+      console.warn('[Agent] Screenshot pre-warm failed (non-fatal):', err.message);
+      return null;
+    })
+    .finally(() => {
+      _agentPrewarmCapturePromise = null;
+    });
+}
+
+async function getAgentScreenshot() {
+  if (_agentPrewarmScreenshot) {
+    const buffer = _agentPrewarmScreenshot;
+    _agentPrewarmScreenshot = null;
+    return buffer;
+  }
+
+  if (_agentPrewarmCapturePromise) {
+    const buffer = await _agentPrewarmCapturePromise;
+    _agentPrewarmScreenshot = null;
+    if (buffer) return buffer;
+  }
+
+  return captureFullScreen();
+}
+
+function clearAgentPrewarm() {
+  _agentPrewarmScreenshot = null;
+  _agentPrewarmCapturePromise = null;
+}
+
 // ─── App lifecycle ────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock.hide();
+
+  // Patch PATH so child processes (codex, vibe) are discoverable.
+  // Must run inside whenReady — execSync before event loop starts can hang on Windows.
+  patchProcessPath();
+  preResolveCodexCmd();
 
   applyStartupSetting();
   createBackgroundWindow();
@@ -245,6 +318,19 @@ function openSettingsWindow() {
 
 ipcMain.handle('settings:get', () => settingsStore.loadSettings());
 
+// Keys that must never appear in logs
+const SENSITIVE_KEYS = new Set([
+  'geminiApiKey', 'openaiApiKey', 'elevenlabsApiKey', 'mistralApiKey',
+]);
+
+function redactForLog(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    out[k] = SENSITIVE_KEYS.has(k) ? (v ? '***' : '') : v;
+  }
+  return out;
+}
+
 ipcMain.handle('settings:save', (_event, partial) => {
   try {
     settingsStore.saveSettings(partial);
@@ -252,7 +338,7 @@ ipcMain.handle('settings:save', (_event, partial) => {
     if ('customHotkey' in partial || 'voiceHotkey' in partial || 'voiceEnabled' in partial) {
       reregisterHotkeys();
     }
-    console.log('[Settings] Saved:', JSON.stringify(partial));
+    console.log('[Settings] Saved:', JSON.stringify(redactForLog(partial)));
     return { ok: true };
   } catch (err) {
     console.error('[Settings] Save error:', err.message);
@@ -396,6 +482,7 @@ async function startVoiceSession() {
   console.log(`[PERF] origin ts=${_voicePerfOrigin}`);
   // Use 'starting' until the HUD renderer signals it is ready.
   setVoiceState('starting');
+  prewarmAgentRuntime();
 
   openVoiceHudWindow();
 }
@@ -526,7 +613,9 @@ async function runVoicePipeline(audioBase64, mimeType) {
     })(),
     (async () => {
       const t = Date.now();
-      const buffer = await captureFullScreen();
+      const buffer = settingsStore.isAgentEnabled()
+        ? await getAgentScreenshot()
+        : await captureFullScreen();
       capMs = Date.now() - t;
       return buffer;
     })(),
@@ -541,7 +630,13 @@ async function runVoicePipeline(audioBase64, mimeType) {
     throw new Error('Empty transcript — no speech detected.');
   }
 
-  // ── Step 3: LLM guide ────────────────────────────────────────────────────
+  // ── Step 3: Route to agent OR Gemini ─────────────────────────────────────
+  if (settingsStore.isAgentEnabled()) {
+    console.log('[Voice] Agent mode active — routing to agent runner');
+    await runAgentPipeline(transcript, screenshotBuffer);
+    return;
+  }
+
   setVoiceState('analyzing');
   console.log('[Voice] [3/4] Getting voice guide from LLM…');
 
@@ -714,14 +809,387 @@ function cleanupVoiceSession() {
     voiceHudWindow.destroy();
     voiceHudWindow = null;
   }
+  clearAgentPrewarm();
   console.log('[Voice] Session cleaned up → idle');
 }
+
+// ─── Agent HUD window ─────────────────────────────────────────────────────
+
+function openAgentHudWindow(backend) {
+  if (agentHudWindow && !agentHudWindow.isDestroyed()) {
+    agentHudWindow.destroy();
+    agentHudWindow = null;
+  }
+
+  const { workAreaSize } = screen.getPrimaryDisplay();
+  const W = 430, H = 560, MARGIN = 24;
+
+  agentHudWindow = new BrowserWindow({
+    x:           workAreaSize.width  - W - MARGIN,
+    y:           workAreaSize.height - H - MARGIN,
+    width:       W,
+    height:      H,
+    minWidth:    360,
+    minHeight:   420,
+    transparent: true,
+    frame:       false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable:   true,
+    movable:     true,
+    hasShadow:   true,
+    icon:        APP_ICON,
+    webPreferences: {
+      preload:          path.join(__dirname, '../preload/preload.js'),
+      contextIsolation: true,
+      nodeIntegration:  false,
+    },
+  });
+
+  agentHudWindow.setAlwaysOnTop(true, 'floating');
+  agentHudWindow.loadFile(path.join(__dirname, '../renderer/agent-hud.html'));
+
+  agentHudWindow.once('ready-to-show', () => {
+    agentHudWindow.show();
+    console.log('[Agent] HUD shown for backend:', backend);
+  });
+
+  agentHudWindow.webContents.once('did-finish-load', () => {
+    if (agentHudWindow && !agentHudWindow.isDestroyed()) {
+      agentHudWindow.webContents.send('agent:init', {
+        backend,
+        assistantName: 'JARVIS',
+      });
+    }
+  });
+
+  agentHudWindow.on('closed', () => {
+    agentHudWindow = null;
+    stopActiveRunner();
+  });
+}
+
+function stopActiveRunner() {
+  if (_activeRunner) {
+    _activeRunner.stop();
+    _activeRunner = null;
+  }
+  if (_narrator) {
+    _narrator.reset();
+    _narrator = null;
+  }
+  if (_activeAgentScratchDir) {
+    try {
+      fs.rmSync(_activeAgentScratchDir, { recursive: true, force: true });
+    } catch {}
+    _activeAgentScratchDir = null;
+  }
+}
+
+function isFastScreenQuestion(transcript, backend) {
+  if ((backend || '').toLowerCase() !== 'codex') return false;
+
+  const text = String(transcript || '').toLowerCase().trim();
+  if (!text || text.length > 140) return false;
+
+  const descriptivePrompt =
+    /\b(what('?s| is)|tell me|describe|explain|summarize|can you tell me|can you explain|what do you see)\b/.test(text);
+  const screenContext =
+    /\b(screen|screenshot|page|window|here|this|right now|currently)\b/.test(text);
+  const agenticIntent =
+    /\b(click|open|type|search|find|fix|debug|inspect|repo|repository|file|files|code|terminal|error|install|run|change|edit|write|compare|plan|analyze)\b/.test(text);
+
+  return descriptivePrompt && screenContext && !agenticIntent;
+}
+
+function formatFastScreenResponse(guide) {
+  const summary = typeof guide?.summary === 'string' ? guide.summary.trim() : '';
+  const spoken = typeof guide?.spoken_summary === 'string' ? guide.spoken_summary.trim() : '';
+  return summary || spoken || 'I checked the screen, but I could not form a clear answer.';
+}
+
+// ─── Agent pipeline ───────────────────────────────────────────────────────
+
+async function runAgentPipeline(transcript, screenshotBuffer) {
+  const backend = settingsStore.getAgentBackend();
+  console.log(`[Agent] Starting ${backend} with transcript: "${transcript}"`);
+  const agentInputReceivedAt = Date.now();
+  console.log(`[PERF] agent-input-received ts=${agentInputReceivedAt}  (transcript handed to agent pipeline, ${transcript.length} chars)`);
+
+  // Close voice HUD
+  if (voiceHudWindow && !voiceHudWindow.isDestroyed()) {
+    voiceHudWindow.destroy();
+    voiceHudWindow = null;
+  }
+
+  // Open Agent HUD
+  openAgentHudWindow(backend);
+
+  // Set Mistral API key in env if using Vibe
+  if (backend === 'vibe') {
+    const mistralKey = settingsStore.getMistralKey();
+    if (mistralKey) process.env.MISTRAL_API_KEY = mistralKey;
+  }
+
+  _activeAgentScratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'screenai-agent-'));
+  console.log('[Agent] Scratch dir:', _activeAgentScratchDir);
+  let imagePaths = [];
+
+  if (backend === 'codex' && screenshotBuffer?.length) {
+    try {
+      const screenshotPath = path.join(_activeAgentScratchDir, 'screen.png');
+      fs.writeFileSync(screenshotPath, screenshotBuffer);
+      imagePaths = [screenshotPath];
+      console.log(`[Agent] Attached screenshot for Codex: ${path.basename(screenshotPath)}`);
+    } catch (err) {
+      console.warn('[Agent] Screenshot attach failed (non-fatal):', err.message);
+    }
+  }
+
+  let agentPrompt;
+  if (backend === 'codex') {
+    agentPrompt = [
+      'You are acting as a desktop screen assistant, not as a repository coding agent.',
+      imagePaths.length
+        ? 'A desktop screenshot is attached. Use the screenshot as the primary source of truth.'
+        : 'No screenshot attachment is available for this request.',
+      'Answer the user question directly based on what is visible on screen.',
+      'Extract visible names, dates, times, locations, organizers, and calls to action when present.',
+      'If any detail is not visible in the screenshot, say that clearly instead of guessing.',
+      'Do not ask what to do with the current directory.',
+      'Do not inspect, edit, or discuss local project files unless the user explicitly asks for coding or terminal help.',
+      `User request: ${transcript}`,
+    ].join('\n\n');
+  } else {
+    agentPrompt = [
+      'You are acting as a desktop screen assistant, not as a repository coding agent.',
+      'This backend is running without image attachments in this app.',
+      'Answer the user request directly, and clearly say when screen-specific details are unavailable.',
+      'Do not ask what to do with the current directory.',
+      'Do not inspect, edit, or discuss local project files unless the user explicitly asks for coding or terminal help.',
+      `User request: ${transcript}`,
+    ].join('\n\n');
+  }
+
+  // Build narrator — speak via ElevenLabs if available, else silent
+  const hasElevenLabs = !!settingsStore.getElevenLabsKey();
+  _narrator = new Narrator(async (text) => {
+    if (!hasElevenLabs) return;
+    // Send TTS subtitle to HUD immediately (before audio)
+    if (agentHudWindow && !agentHudWindow.isDestroyed()) {
+      agentHudWindow.webContents.send('agent:tts', text);
+    }
+    try {
+      const { audioBuffer } = await synthesizeSpeech(text);
+      // Play audio via the agent HUD
+      if (agentHudWindow && !agentHudWindow.isDestroyed()) {
+        agentHudWindow.webContents.send('agent:play-audio', {
+          audioBase64: audioBuffer.toString('base64'),
+        });
+      }
+    } catch (err) {
+      console.warn('[Agent] TTS failed (non-fatal):', err.message);
+    }
+  });
+
+  // Accumulate response fragments into one final text
+  let responseChunks = [];
+  const agentStartedAt = Date.now();
+  let firstAgentEventLogged = false;
+  let firstResponseLogged = false;
+  const emitAgentEvent = (event) => {
+    if (!firstAgentEventLogged) {
+      firstAgentEventLogged = true;
+      console.log(`[PERF] agent-first-event: ${Date.now() - agentStartedAt}ms  (runner start → ${event.type})`);
+    }
+    console.log(`[Agent] Event: ${event.type} — ${event.label} ${event.detail ? event.detail.slice(0, 80) : ''}`);
+
+    if (event.type === 'response') {
+      if (!firstResponseLogged) {
+        firstResponseLogged = true;
+        const transcriptToResponseMs = Date.now() - agentInputReceivedAt;
+        const responseMs = Date.now() - agentStartedAt;
+        console.log(`[PERF] transcript→agent-response: ${transcriptToResponseMs}ms  (text received by agent pipeline → first response)`);
+        console.log(`[PERF] agent-response: ${responseMs}ms  (runner start → first response)`);
+        if (_voicePerfOrigin) {
+          console.log(`[PERF] hotkey→agent-response: ${Date.now() - _voicePerfOrigin}ms`);
+        }
+      }
+      responseChunks.push(event.detail || '');
+      return;
+    }
+
+    if (agentHudWindow && !agentHudWindow.isDestroyed()) {
+      agentHudWindow.webContents.send('agent:event', event);
+    }
+    if (_narrator && event.silent !== true) _narrator.feed(event);
+  };
+
+  const finalizeAgentRun = () => {
+    const transcriptToDoneMs = Date.now() - agentInputReceivedAt;
+    const agentTotalMs = Date.now() - agentStartedAt;
+    console.log('[Agent] Run complete');
+    console.log(`[PERF] transcript→agent-done: ${transcriptToDoneMs}ms  (text received by agent pipeline → done)`);
+    console.log(`[PERF] agent-total: ${agentTotalMs}ms  (runner start → done)`);
+
+    const fullResponse = responseChunks.join('\n').trim();
+    if (fullResponse) {
+      const responseEvent = {
+        type: 'response', label: 'Response', detail: fullResponse,
+      };
+      if (agentHudWindow && !agentHudWindow.isDestroyed()) {
+        agentHudWindow.webContents.send('agent:event', responseEvent);
+      }
+      if (_narrator) _narrator.feed(responseEvent);
+    }
+
+    if (agentHudWindow && !agentHudWindow.isDestroyed()) {
+      agentHudWindow.webContents.send('agent:done');
+    }
+    setVoiceState('idle');
+    if (_narrator) {
+      _narrator.reset();
+      _narrator = null;
+    }
+    if (_activeAgentScratchDir) {
+      try {
+        fs.rmSync(_activeAgentScratchDir, { recursive: true, force: true });
+      } catch {}
+      _activeAgentScratchDir = null;
+    }
+    _activeRunner = null;
+  };
+
+  if (isFastScreenQuestion(transcript, backend)) {
+    console.log('[Agent] Fast screen-answer route selected');
+    emitAgentEvent({
+      type: 'milestone',
+      label: 'Scanning screen',
+      detail: 'Using the low-latency vision path for a direct answer…',
+      silent: true,
+    });
+
+    try {
+      const guide = await getVoiceGuide(screenshotBuffer, transcript);
+      emitAgentEvent({
+        type: 'response',
+        label: 'Response',
+        detail: formatFastScreenResponse(guide),
+      });
+    } catch (err) {
+      emitAgentEvent({
+        type: 'error',
+        label: 'Vision answer failed',
+        detail: err.message,
+      });
+    }
+
+    finalizeAgentRun();
+    return;
+  }
+
+  // Create and start runner
+  _activeRunner = createRunner(backend, { cwd: _activeAgentScratchDir });
+
+  _activeRunner.on('event', (event) => {
+    emitAgentEvent(event);
+  });
+
+  _activeRunner.on('done', () => {
+    finalizeAgentRun();
+  });
+
+  setVoiceState('analyzing');
+  _activeRunner.run({ prompt: agentPrompt, imagePaths });
+}
+
+// ─── IPC: agent stop ──────────────────────────────────────────────────────
+
+ipcMain.on('agent:stop', () => {
+  console.log('[Agent] Stop requested by user');
+  stopActiveRunner();
+  if (agentHudWindow && !agentHudWindow.isDestroyed()) {
+    agentHudWindow.destroy();
+    agentHudWindow = null;
+  }
+  setVoiceState('idle');
+});
+
+ipcMain.on('agent:telemetry', (_event, { level, message }) => {
+  const prefix = '[AgentHUD]';
+  const text = typeof message === 'string' ? message : String(message || '');
+  if ((level || '').toLowerCase() === 'error') {
+    console.error(prefix, text);
+  } else {
+    console.warn(prefix, text);
+  }
+});
+
+// ─── IPC: check agent installation ────────────────────────────────────────
+
+ipcMain.handle('agent:check', async (_event, backend) => {
+  return checkAgentInstallation(backend, { force: true });
+});
+
+// ─── IPC: run codex auth ───────────────────────────────────────────────────
+
+ipcMain.handle('agent:auth-codex', async () => {
+  const { exec } = require('child_process');
+  const resolved = await resolveCodexCommand({ force: true });
+
+  if (!resolved) {
+    return { ok: false, error: 'Codex is not installed.' };
+  }
+
+  if (process.platform === 'win32') {
+    if (resolved.runtime === 'wsl') {
+      exec('start "" cmd /k wsl.exe bash -ic "codex login; exec bash -i"', { shell: true });
+    } else {
+      exec('start "" cmd /k codex login', { shell: true });
+    }
+  } else if (process.platform === 'darwin') {
+    exec('open -a Terminal -e "codex login"');
+  } else {
+    exec('codex login', (err) => {
+      if (err) console.error('[Agent] codex auth error:', err.message);
+    });
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('agent:install', async (_event, backend) => {
+  const { exec } = require('child_process');
+  const name = (backend || 'codex').toLowerCase();
+  const pkg = name === 'vibe' ? '@mistral-ai/vibe' : '@openai/codex';
+
+  if (process.platform === 'win32') {
+    exec(`start "" cmd /k npm install -g ${pkg}`, { shell: true });
+  } else if (process.platform === 'darwin') {
+    exec(`open -a Terminal -e "npm install -g ${pkg}"`);
+  } else {
+    exec(`x-terminal-emulator -e sh -lc "npm install -g ${pkg}; exec sh"`, (err) => {
+      if (err) {
+        exec(`npm install -g ${pkg}`, (fallbackErr) => {
+          if (fallbackErr) console.error('[Agent] install error:', fallbackErr.message);
+        });
+      }
+    });
+  }
+
+  return { ok: true };
+});
 
 // ─── Screenshot flow cleanup ──────────────────────────────────────────────
 
 function closeAll() {
   if (captureWindow)  { captureWindow.destroy();  captureWindow  = null; }
   if (overlayWindow)  { overlayWindow.destroy();  overlayWindow  = null; }
+  // Also tear down any running agent session
+  stopActiveRunner();
+  if (agentHudWindow && !agentHudWindow.isDestroyed()) {
+    agentHudWindow.destroy(); agentHudWindow = null;
+  }
+  clearAgentPrewarm();
   fullScreenBuffer = null;
   croppedBuffer    = null;
 }
