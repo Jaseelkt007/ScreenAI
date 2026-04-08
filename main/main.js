@@ -997,6 +997,19 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
   const agentStartedAt = Date.now();
   let firstAgentEventLogged = false;
   let firstResponseLogged = false;
+  const pendingProgressTimers = [];
+  const clearPendingProgressTimers = () => {
+    while (pendingProgressTimers.length) {
+      clearTimeout(pendingProgressTimers.pop());
+    }
+  };
+  const scheduleProgressUpdate = (delayMs, eventFactory) => {
+    const timer = setTimeout(() => {
+      if (firstResponseLogged) return;
+      emitAgentEvent(eventFactory());
+    }, delayMs);
+    pendingProgressTimers.push(timer);
+  };
   const emitAgentEvent = (event) => {
     if (!firstAgentEventLogged) {
       firstAgentEventLogged = true;
@@ -1007,6 +1020,7 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
     if (event.type === 'response') {
       if (!firstResponseLogged) {
         firstResponseLogged = true;
+        clearPendingProgressTimers();
         const transcriptToResponseMs = Date.now() - agentInputReceivedAt;
         const responseMs = Date.now() - agentStartedAt;
         console.log(`[PERF] transcript→agent-response: ${transcriptToResponseMs}ms  (text received by agent pipeline → first response)`);
@@ -1026,6 +1040,7 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
   };
 
   const finalizeAgentRun = () => {
+    clearPendingProgressTimers();
     const transcriptToDoneMs = Date.now() - agentInputReceivedAt;
     const agentTotalMs = Date.now() - agentStartedAt;
     console.log('[Agent] Run complete');
@@ -1065,7 +1080,7 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
     emitAgentEvent({
       type: 'milestone',
       label: 'Scanning screen',
-      detail: 'Using the low-latency vision path for a direct answer…',
+      detail: 'Scanning the screen for a quick answer…',
       silent: true,
     });
 
@@ -1100,6 +1115,20 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
   });
 
   setVoiceState('analyzing');
+  if (backend === 'codex') {
+    scheduleProgressUpdate(4200, () => ({
+      type: 'milestone',
+      label: 'Still working',
+      detail: 'Taking a bit longer than usual, but I am still on it.',
+      spokenText: 'Give me a second. I am still looking through it.',
+    }));
+    scheduleProgressUpdate(9000, () => ({
+      type: 'milestone',
+      label: 'Finishing analysis',
+      detail: 'Almost there. I am pulling the answer together now.',
+      spokenText: 'Almost there. I am putting the answer together now.',
+    }));
+  }
   _activeRunner.run({ prompt: agentPrompt, imagePaths });
 }
 

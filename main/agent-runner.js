@@ -667,7 +667,7 @@ class CodexRunner extends AgentRunner {
       this._emit(
         'milestone',
         'Processing request',
-        'Reviewing your screen and prompt…'
+        'Give me a second while I look this over.'
       );
 
       let buffer = '';

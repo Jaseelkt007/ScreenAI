@@ -32,9 +32,9 @@ class Narrator {
       case 'milestone':
         this._clearBatch();
         this._trySpeak(
-          event.detail
-            ? `${event.label}: ${event.detail}`
-            : event.label
+          event.spokenText ||
+          event.detail ||
+          event.label
         );
         break;
 
@@ -51,7 +51,7 @@ class Narrator {
 
       case 'error':
         this._clearBatch();
-        this._trySpeak(`Error: ${event.label}`);
+        this._trySpeak(event.spokenText || `Error: ${event.label}`);
         break;
 
       case 'tool_call':

@@ -143,6 +143,14 @@ body {
   transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
+.panel,
+#feed-wrap,
+#response-panel,
+#response-text,
+#voice-pill {
+  -webkit-app-region: no-drag;
+}
+
 #close-btn {
   width: 30px;
   height: 30px;
@@ -260,8 +268,12 @@ body {
 }
 
 #response-panel {
+  display: flex;
+  flex-direction: column;
   flex: 0 0 auto;
-  max-height: 220px;
+  min-height: 140px;
+  max-height: min(250px, 42%);
+  overflow: hidden;
 }
 
 .panel-header {
@@ -403,6 +415,8 @@ body {
 }
 
 #response-text {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 2px 14px 16px;
   color: var(--text);
   font-size: 14px;
@@ -410,12 +424,204 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
   overflow-y: auto;
+  user-select: text;
+  -webkit-user-select: text;
   scrollbar-width: thin;
   scrollbar-color: rgba(141, 246, 194, 0.22) transparent;
 }
 
 #response-text::-webkit-scrollbar { width: 4px; }
 #response-text::-webkit-scrollbar-thumb { background: rgba(141, 246, 194, 0.22); border-radius: 999px; }
+
+#response-text p {
+  margin-bottom: 10px;
+}
+
+#response-text p:last-child {
+  margin-bottom: 0;
+}
+
+#response-text h1,
+#response-text h2,
+#response-text h3 {
+  margin: 14px 0 8px;
+  font-weight: 700;
+  line-height: 1.28;
+  color: var(--cyan-strong);
+}
+
+#response-text h1 { font-size: 18px; }
+#response-text h2 { font-size: 16px; }
+#response-text h3 { font-size: 14px; }
+
+#response-text h1:first-child,
+#response-text h2:first-child,
+#response-text h3:first-child {
+  margin-top: 0;
+}
+
+#response-text ul,
+#response-text ol {
+  margin: 8px 0 10px;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+#response-text li {
+  line-height: 1.6;
+}
+
+#response-text blockquote {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-left: 3px solid rgba(105, 230, 255, 0.42);
+  border-radius: 0 10px 10px 0;
+  background: rgba(105, 230, 255, 0.08);
+  color: var(--muted);
+}
+
+#response-text hr {
+  margin: 12px 0;
+  border: none;
+  border-top: 1px solid rgba(105, 230, 255, 0.14);
+}
+
+#response-text a {
+  color: var(--cyan);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(105, 230, 255, 0.26);
+}
+
+#response-text a:hover {
+  color: var(--cyan-strong);
+  border-bottom-color: rgba(181, 247, 255, 0.42);
+}
+
+#response-text strong {
+  color: var(--cyan-strong);
+  font-weight: 700;
+}
+
+#response-text em {
+  font-style: italic;
+}
+
+#response-text code {
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(105, 230, 255, 0.12);
+  background: rgba(8, 22, 34, 0.8);
+  color: #95f3ff;
+  font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+  font-size: 12px;
+}
+
+#response-text pre.code-block {
+  position: relative;
+  margin: 10px 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(105, 230, 255, 0.14);
+  background: rgba(3, 10, 16, 0.9);
+  color: #95f3ff;
+}
+
+#response-text pre.code-block code {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+#response-text .code-lang {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--dim);
+  font-family: "Consolas", "Cascadia Code", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+#response-text .math-inline,
+#response-text .math-block {
+  font-family: "Cambria Math", "Times New Roman", serif;
+  color: var(--cyan-strong);
+}
+
+#response-text .math-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px;
+}
+
+#response-text .math-block {
+  display: flex;
+  justify-content: center;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(105, 230, 255, 0.12);
+  background: rgba(6, 18, 28, 0.72);
+  overflow-x: auto;
+}
+
+#response-text .math-render {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+#response-text .math-frac {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 0 3px;
+  vertical-align: middle;
+}
+
+#response-text .math-frac-num {
+  display: block;
+  padding: 0 4px 1px;
+  border-bottom: 1px solid currentColor;
+}
+
+#response-text .math-frac-den {
+  display: block;
+  padding: 1px 4px 0;
+}
+
+#response-text .math-sqrt {
+  display: inline-flex;
+  align-items: stretch;
+  margin-right: 2px;
+}
+
+#response-text .math-radical {
+  padding-right: 2px;
+  font-size: 1.08em;
+}
+
+#response-text .math-radicand {
+  display: inline-block;
+  padding: 1px 2px 0;
+  border-top: 1px solid currentColor;
+}
+
+#response-text .math-text {
+  color: var(--muted);
+  font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
+  font-size: 0.92em;
+}
 
 #footer {
   display: flex;

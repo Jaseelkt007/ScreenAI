@@ -108,8 +108,13 @@ function addFeedRow(event) {
 function showResponse(text) {
   finalizeActiveRow(false);
   responseLabel.textContent = 'Briefing';
-  responseText.textContent = text;
+  if (typeof window.renderMarkdown === 'function') {
+    responseText.innerHTML = window.renderMarkdown(text || '');
+  } else {
+    responseText.textContent = text;
+  }
   responsePanel.classList.remove('hidden');
+  responsePanel.scrollTop = 0;
   responseText.scrollTop = 0;
 }
 
@@ -290,6 +295,13 @@ replayBtn.addEventListener('click', () => {
   audioQueue = [];
   audioPlaying = false;
   playAudioBytes(lastReplayBytes, { keepVoiceState: false });
+});
+
+responseText.addEventListener('click', (event) => {
+  const link = event.target.closest('a[href]');
+  if (!link) return;
+  event.preventDefault();
+  window.electronAPI.openExternal(link.href);
 });
 
 stopBtn.addEventListener('click', () => {
