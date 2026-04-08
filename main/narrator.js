@@ -15,6 +15,14 @@ const RATE_LIMIT_MS  = 3500;   // minimum gap between TTS calls
 const BATCH_WINDOW_MS = 9000;  // debounce window before summarizing tool calls
 const BATCH_SPEAK_AT = 8;      // speak batch immediately if this many silent calls pile up
 
+function withSir(text) {
+  const spoken = String(text || '').trim();
+  if (!spoken) return '';
+  if (/\bsir[.!?]?$/i.test(spoken)) return spoken;
+  if (/[.!?]$/.test(spoken)) return spoken.replace(/[.!?]+$/, ', sir.');
+  return `${spoken}, sir.`;
+}
+
 class Narrator {
   /**
    * @param {(text: string) => Promise<void>} speakFn — async function to play TTS
@@ -41,7 +49,7 @@ class Narrator {
       case 'response': {
         this._clearBatch();
         // Truncate long responses for natural TTS length
-        const text = (event.detail || '').trim();
+        const text = (event.spokenText || event.detail || '').trim();
         const spoken = text.length > 280
           ? text.slice(0, 280).replace(/\s+\S*$/, '') + '…'
           : text;
@@ -51,7 +59,7 @@ class Narrator {
 
       case 'error':
         this._clearBatch();
-        this._trySpeak(event.spokenText || `Error: ${event.label}`);
+        this._trySpeak(withSir(event.spokenText || `Error: ${event.label}`));
         break;
 
       case 'tool_call':
@@ -86,9 +94,11 @@ class Narrator {
     this._clearBatch();
     if (n > 0) {
       this._trySpeak(
-        n === 1
-          ? 'Running an operation…'
-          : `Running ${n} operations…`
+        withSir(
+          n === 1
+            ? 'Running an operation now'
+            : `Running ${n} operations now`
+        )
       );
     }
   }

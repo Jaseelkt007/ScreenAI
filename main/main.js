@@ -101,6 +101,8 @@ let _guideTtsBuffer     = []; // array of base64 strings
 let _guideTtsStreamEnded = false;
 let _agentPrewarmScreenshot = null;
 let _agentPrewarmCapturePromise = null;
+let _agentHudReady = false;
+let _agentHudBuffer = [];
 
 function setVoiceState(state, message) {
   voiceState = state;
@@ -154,6 +156,36 @@ async function getAgentScreenshot() {
 function clearAgentPrewarm() {
   _agentPrewarmScreenshot = null;
   _agentPrewarmCapturePromise = null;
+}
+
+function resetAgentHudBuffer() {
+  _agentHudReady = false;
+  _agentHudBuffer = [];
+}
+
+function queueAgentHudMessage(channel, payload) {
+  if (!agentHudWindow || agentHudWindow.isDestroyed()) return;
+  if (_agentHudReady && !agentHudWindow.webContents.isDestroyed()) {
+    agentHudWindow.webContents.send(channel, payload);
+    return;
+  }
+  _agentHudBuffer.push({ channel, payload });
+}
+
+function flushAgentHudBuffer() {
+  if (
+    !_agentHudReady ||
+    !agentHudWindow ||
+    agentHudWindow.isDestroyed() ||
+    agentHudWindow.webContents.isDestroyed()
+  ) {
+    return;
+  }
+
+  for (const { channel, payload } of _agentHudBuffer) {
+    agentHudWindow.webContents.send(channel, payload);
+  }
+  _agentHudBuffer = [];
 }
 
 // ─── App lifecycle ────────────────────────────────────────────────────────
@@ -820,9 +852,11 @@ function openAgentHudWindow(backend) {
     agentHudWindow.destroy();
     agentHudWindow = null;
   }
+  resetAgentHudBuffer();
 
   const { workAreaSize } = screen.getPrimaryDisplay();
   const W = 430, H = 560, MARGIN = 24;
+  const hudOpenedAt = Date.now();
 
   agentHudWindow = new BrowserWindow({
     x:           workAreaSize.width  - W - MARGIN,
@@ -851,19 +885,24 @@ function openAgentHudWindow(backend) {
 
   agentHudWindow.once('ready-to-show', () => {
     agentHudWindow.show();
+    console.log(`[PERF] agent-hud-show: ${Date.now() - hudOpenedAt}ms  (agent HUD created → shown)`);
     console.log('[Agent] HUD shown for backend:', backend);
   });
 
   agentHudWindow.webContents.once('did-finish-load', () => {
     if (agentHudWindow && !agentHudWindow.isDestroyed()) {
+      _agentHudReady = true;
+      console.log(`[PERF] agent-hud-ready: ${Date.now() - hudOpenedAt}ms  (agent HUD created → renderer ready)`);
       agentHudWindow.webContents.send('agent:init', {
         backend,
         assistantName: 'JARVIS',
       });
+      flushAgentHudBuffer();
     }
   });
 
   agentHudWindow.on('closed', () => {
+    resetAgentHudBuffer();
     agentHudWindow = null;
     stopActiveRunner();
   });
@@ -906,6 +945,34 @@ function formatFastScreenResponse(guide) {
   const summary = typeof guide?.summary === 'string' ? guide.summary.trim() : '';
   const spoken = typeof guide?.spoken_summary === 'string' ? guide.spoken_summary.trim() : '';
   return summary || spoken || 'I checked the screen, but I could not form a clear answer.';
+}
+
+function toSpeechPlainText(text) {
+  return String(text || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
+    .replace(/\$\$([\s\S]*?)\$\$/g, '$1')
+    .replace(/\\\[([\s\S]*?)\\\]/g, '$1')
+    .replace(/\\\(([\s\S]*?)\\\)/g, '$1')
+    .replace(/\$([^$]+)\$/g, '$1')
+    .replace(/[*_#>~-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function withSir(text) {
+  const spoken = String(text || '').trim();
+  if (!spoken) return '';
+  if (/\bsir[.!?]?$/i.test(spoken)) return spoken;
+  if (/[.!?]$/.test(spoken)) return spoken.replace(/[.!?]+$/, ', sir.');
+  return `${spoken}, sir.`;
+}
+
+function buildJarvisResponseSpeech(text) {
+  const plain = toSpeechPlainText(text);
+  if (!plain) return 'I have the answer for you, sir.';
+  return withSir(plain);
 }
 
 // ─── Agent pipeline ───────────────────────────────────────────────────────
@@ -976,17 +1043,13 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
   _narrator = new Narrator(async (text) => {
     if (!hasElevenLabs) return;
     // Send TTS subtitle to HUD immediately (before audio)
-    if (agentHudWindow && !agentHudWindow.isDestroyed()) {
-      agentHudWindow.webContents.send('agent:tts', text);
-    }
+    queueAgentHudMessage('agent:tts', text);
     try {
       const { audioBuffer } = await synthesizeSpeech(text);
       // Play audio via the agent HUD
-      if (agentHudWindow && !agentHudWindow.isDestroyed()) {
-        agentHudWindow.webContents.send('agent:play-audio', {
-          audioBase64: audioBuffer.toString('base64'),
-        });
-      }
+      queueAgentHudMessage('agent:play-audio', {
+        audioBase64: audioBuffer.toString('base64'),
+      });
     } catch (err) {
       console.warn('[Agent] TTS failed (non-fatal):', err.message);
     }
@@ -1033,9 +1096,7 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
       return;
     }
 
-    if (agentHudWindow && !agentHudWindow.isDestroyed()) {
-      agentHudWindow.webContents.send('agent:event', event);
-    }
+    queueAgentHudMessage('agent:event', event);
     if (_narrator && event.silent !== true) _narrator.feed(event);
   };
 
@@ -1050,17 +1111,16 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
     const fullResponse = responseChunks.join('\n').trim();
     if (fullResponse) {
       const responseEvent = {
-        type: 'response', label: 'Response', detail: fullResponse,
+        type: 'response',
+        label: 'Response',
+        detail: fullResponse,
+        spokenText: buildJarvisResponseSpeech(fullResponse),
       };
-      if (agentHudWindow && !agentHudWindow.isDestroyed()) {
-        agentHudWindow.webContents.send('agent:event', responseEvent);
-      }
+      queueAgentHudMessage('agent:event', responseEvent);
       if (_narrator) _narrator.feed(responseEvent);
     }
 
-    if (agentHudWindow && !agentHudWindow.isDestroyed()) {
-      agentHudWindow.webContents.send('agent:done');
-    }
+    queueAgentHudMessage('agent:done');
     setVoiceState('idle');
     if (_narrator) {
       _narrator.reset();
@@ -1080,8 +1140,8 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
     emitAgentEvent({
       type: 'milestone',
       label: 'Scanning screen',
-      detail: 'Scanning the screen for a quick answer…',
-      silent: true,
+      detail: 'Right away, sir. I am checking the screen now.',
+      spokenText: 'Right away, sir. I am checking the screen now.',
     });
 
     try {
@@ -1120,13 +1180,13 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
       type: 'milestone',
       label: 'Still working',
       detail: 'Taking a bit longer than usual, but I am still on it.',
-      spokenText: 'Give me a second. I am still looking through it.',
+      spokenText: 'Give me a second, sir. I am still looking through it.',
     }));
     scheduleProgressUpdate(9000, () => ({
       type: 'milestone',
       label: 'Finishing analysis',
       detail: 'Almost there. I am pulling the answer together now.',
-      spokenText: 'Almost there. I am putting the answer together now.',
+      spokenText: 'Almost there, sir. I am putting the answer together now.',
     }));
   }
   _activeRunner.run({ prompt: agentPrompt, imagePaths });
