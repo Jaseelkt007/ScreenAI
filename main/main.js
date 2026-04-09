@@ -1158,7 +1158,9 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
       type: 'milestone',
       label: 'Scanning screen',
       detail: 'Scanning the screen…',
-      silent: true,  // no TTS — keep rate-limit clear for the response audio
+      // Short phrase — Gemini visual analysis takes 4–7s, well beyond RATE_LIMIT_MS (3.5s),
+      // so this never blocks the response audio.
+      spokenText: 'On it, sir.',
     });
 
     try {

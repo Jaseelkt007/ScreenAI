@@ -59,11 +59,19 @@ window.electronAPI.settingsGet().then((s) => {
   openaiKeyInput.value    = s.openaiApiKey  || '';
   startupCheckbox.checked = s.startWithOS   !== false;
 
-  // Model dropdown
-  const savedModel = s.geminiModel || 'gemini-3-flash-preview';
+  // Show first-run welcome bar
+  if (s.firstRun !== false) {
+    const welcomeEl = document.getElementById('welcome');
+    if (welcomeEl) welcomeEl.classList.remove('hidden');
+  }
+
+  // Model dropdown — upgrade stale model name saved from old version
+  const STALE_MODELS = { 'gemini-3-flash-preview': 'gemini-2.5-flash-preview-04-17' };
+  const rawModel = s.geminiModel || 'gemini-2.5-flash-preview-04-17';
+  const savedModel = STALE_MODELS[rawModel] || rawModel;
   const opt = modelSelect.querySelector(`option[value="${savedModel}"]`);
   if (opt) modelSelect.value = savedModel;
-  else modelSelect.value = 'gemini-3-flash-preview';
+  else modelSelect.value = 'gemini-2.5-flash-preview-04-17';
   updateOpenAIKeyVisibility();
 
   // Capture hotkey
@@ -366,6 +374,28 @@ toggleMistralVisBtn.addEventListener('click', () => {
 // Mistral console link
 mistralLink.addEventListener('click', () => {
   window.electronAPI.openExternal('https://console.mistral.ai');
+});
+
+// ElevenLabs voice library link
+const elevenlabsVoicesLink = document.getElementById('elevenlabs-voices-link');
+if (elevenlabsVoicesLink) {
+  elevenlabsVoicesLink.addEventListener('click', () => {
+    window.electronAPI.openExternal('https://elevenlabs.io/voice-library');
+  });
+}
+
+// ── Tab switching ──────────────────────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const target = btn.dataset.tab;
+    document.querySelectorAll('.tab-btn').forEach((b) => {
+      b.classList.toggle('active', b === btn);
+      b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+    });
+    document.querySelectorAll('.tab-panel').forEach((p) => {
+      p.classList.toggle('hidden', p.id !== `tab-${target}`);
+    });
+  });
 });
 
 // ── Helpers ────────────────────────────────────────────────────────────────

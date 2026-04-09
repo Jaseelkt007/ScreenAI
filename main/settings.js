@@ -50,7 +50,7 @@ function getDefaults() {
   return {
     geminiApiKey:        '',
     openaiApiKey:        '',
-    geminiModel:         'gemini-3-flash-preview',
+    geminiModel:         'gemini-2.5-flash-preview-04-17',
     customHotkey:        '',
     startWithOS:         true,
     firstRun:            true,
@@ -101,7 +101,7 @@ function getOpenAIKey() {
 
 /** Get the effective model name. */
 function getModel() {
-  return getSetting('geminiModel', '') || process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
+  return getSetting('geminiModel', '') || process.env.GEMINI_MODEL || 'gemini-2.5-flash-preview-04-17';
 }
 
 /** Get ElevenLabs API key. */
