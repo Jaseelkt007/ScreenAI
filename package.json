@@ -10,7 +10,8 @@
     "prebuild:win": "node scripts/create-icon.js",
     "prebuild:mac": "node scripts/create-icon.js",
     "prebuild": "node scripts/create-icon.js",
-    "build:win": "electron-builder --win",
+    "build:win": "electron-builder --win -c.win.signAndEditExecutable=false",
+    "build:win:full": "electron-builder --win",
     "build:mac": "electron-builder --mac",
     "build": "electron-builder --win --mac"
   },

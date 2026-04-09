@@ -1,7 +1,7 @@
 {
   "appId": "com.screenai.assistant",
   "productName": "ScreenAI",
-  "copyright": "© 2026 Mohammed Jaseel Kunnathodika",
+  "copyright": "Copyright (c) 2026 Mohammed Jaseel Kunnathodika",
   "directories": {
     "output": "dist",
     "buildResources": "assets"
@@ -19,6 +19,7 @@
     "node_modules/screenshot-desktop/lib/win32/*.manifest"
   ],
   "win": {
+    "executableName": "ScreenAI",
     "target": [
       { "target": "nsis", "arch": ["x64"] }
     ],
