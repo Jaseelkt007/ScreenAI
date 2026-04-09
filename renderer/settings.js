@@ -52,6 +52,10 @@ let recordingHotkey      = false;
 let currentHotkey        = '';   // empty string = use platform defaults (F7)
 let recordingVoiceHotkey = false;
 let currentVoiceHotkey   = '';   // empty string = use platform defaults (F8)
+let mistralInstallMonitor = null;
+
+const MISTRAL_INSTALL_POLL_MS = 3000;
+const MISTRAL_INSTALL_TIMEOUT_MS = 180000;
 
 // ── Load current settings on open ─────────────────────────────────────────
 window.electronAPI.settingsGet().then((s) => {
@@ -306,6 +310,55 @@ function updateAgentSections() {
   vibeSection.classList.toggle('hidden', !isVibe);
 }
 
+function setMistralStatus(text, color = '') {
+  vibeStatus.textContent = text;
+  vibeStatus.style.color = color;
+}
+
+function renderMistralCheckResult(result) {
+  if (result.installed) {
+    setMistralStatus('✓ Installed' + (result.version ? ' · ' + result.version : ''), '#86efac');
+    return;
+  }
+  setMistralStatus('✗ Not found — click INSTALL to set up Mistral', '#fca5a5');
+}
+
+function stopMistralInstallMonitor() {
+  if (mistralInstallMonitor) {
+    clearTimeout(mistralInstallMonitor);
+    mistralInstallMonitor = null;
+  }
+  vibeInstallBtn.disabled = false;
+}
+
+async function monitorMistralInstall(startedAt = Date.now()) {
+  let result;
+  try {
+    result = await window.electronAPI.agentCheck('vibe');
+  } catch (err) {
+    stopMistralInstallMonitor();
+    setMistralStatus(`✗ ${err.message || 'Unable to verify Mistral setup.'}`, '#fca5a5');
+    return;
+  }
+
+  if (result.installed) {
+    stopMistralInstallMonitor();
+    renderMistralCheckResult(result);
+    return;
+  }
+
+  if (Date.now() - startedAt >= MISTRAL_INSTALL_TIMEOUT_MS) {
+    stopMistralInstallMonitor();
+    setMistralStatus('Installer opened. Finish setup in the terminal, then click CHECK.', '#f59e0b');
+    return;
+  }
+
+  setMistralStatus('Installer opened. Waiting for Mistral…', '#f59e0b');
+  mistralInstallMonitor = setTimeout(() => {
+    monitorMistralInstall(startedAt);
+  }, MISTRAL_INSTALL_POLL_MS);
+}
+
 // Check Codex installation
 codexCheckBtn.addEventListener('click', async () => {
   codexStatus.textContent = 'Checking…';
@@ -347,22 +400,28 @@ codexAuthBtn.addEventListener('click', async () => {
 
 // Check Vibe installation
 vibeCheckBtn.addEventListener('click', async () => {
-  vibeStatus.textContent = 'Checking…';
-  vibeStatus.style.color = '';
-  const result = await window.electronAPI.agentCheck('vibe');
-  if (result.installed) {
-    vibeStatus.textContent = '✓ Installed' + (result.version ? ' · ' + result.version : '');
-    vibeStatus.style.color = '#86efac';
-  } else {
-    vibeStatus.textContent = '✗ Not found — run: npm install -g @mistral-ai/vibe';
-    vibeStatus.style.color = '#fca5a5';
+  stopMistralInstallMonitor();
+  setMistralStatus('Checking…');
+  try {
+    const result = await window.electronAPI.agentCheck('vibe');
+    renderMistralCheckResult(result);
+  } catch (err) {
+    setMistralStatus(`✗ ${err.message || 'Unable to check Mistral.'}`, '#fca5a5');
   }
 });
 
 vibeInstallBtn.addEventListener('click', async () => {
-  vibeStatus.textContent = 'Opening install terminal…';
-  vibeStatus.style.color = '#f59e0b';
-  await window.electronAPI.agentInstall('vibe');
+  stopMistralInstallMonitor();
+  vibeInstallBtn.disabled = true;
+  setMistralStatus('Opening Mistral installer…', '#f59e0b');
+  const result = await window.electronAPI.agentInstall('vibe');
+  if (result && result.ok === false) {
+    stopMistralInstallMonitor();
+    setMistralStatus(`✗ ${result.error || 'Unable to launch Mistral installer.'}`, '#fca5a5');
+    return;
+  }
+  setMistralStatus('Installer opened. Waiting for Mistral…', '#f59e0b');
+  monitorMistralInstall();
 });
 
 // Mistral key visibility toggle

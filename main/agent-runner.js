@@ -2,6 +2,7 @@
 
 const { execSync, spawn } = require('child_process');
 const { EventEmitter }    = require('events');
+const fs                  = require('fs');
 const os                  = require('os');
 const path                = require('path');
 
@@ -31,6 +32,7 @@ function patchProcessPath() {
 function _patchWindows() {
   const sep = ';';
   const candidates = new Set();
+  const home = os.homedir();
 
   // 1. Read Windows user PATH from registry (covers ALL install methods)
   try {
@@ -54,7 +56,24 @@ function _patchWindows() {
   // 3. Common Windows default location
   const appData = process.env.APPDATA ||
     path.join(os.homedir(), 'AppData', 'Roaming');
+  const localAppData = process.env.LOCALAPPDATA ||
+    path.join(home, 'AppData', 'Local');
   candidates.add(path.join(appData, 'npm'));
+  candidates.add(path.join(home, '.local', 'bin'));
+
+  // 4. Common Python user script locations (used by pip/uv installs)
+  [
+    path.join(appData, 'Python'),
+    path.join(localAppData, 'Programs', 'Python'),
+  ].forEach((root) => {
+    try {
+      for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        candidates.add(path.join(root, entry.name));
+        candidates.add(path.join(root, entry.name, 'Scripts'));
+      }
+    } catch {}
+  });
 
   // Merge: prepend any missing entries to process.env.PATH
   const current  = new Set((process.env.PATH || '').split(sep).filter(Boolean));
@@ -279,6 +298,8 @@ async function probeWslCodex(env) {
 
 let _codexResolution = null;
 let _codexResolutionPromise = null;
+let _mistralPromptFlag = null;
+let _mistralPromptFlagPromise = null;
 
 async function resolveCodexCommand(opts = {}) {
   const force = opts.force === true;
@@ -366,6 +387,46 @@ function preResolveCodexCmd() {
   resolveCodexCommand().catch((err) => {
     console.warn('[AgentEnv] Codex pre-resolve failed:', err.message);
   });
+}
+
+async function resolveMistralPromptFlag(opts = {}) {
+  const force = opts.force === true;
+  if (force) {
+    _mistralPromptFlag = null;
+    _mistralPromptFlagPromise = null;
+  }
+
+  if (_mistralPromptFlag) return _mistralPromptFlag;
+  if (_mistralPromptFlagPromise) return _mistralPromptFlagPromise;
+
+  _mistralPromptFlagPromise = (async () => {
+    const env = buildAgentEnv({ TERM: 'dumb', NO_COLOR: '1' });
+    const help = await captureCommand('vibe', ['--help'], {
+      env,
+      timeoutMs: 5000,
+      shell: process.platform === 'win32',
+    });
+    const combined = stripAnsi([help.stdout, help.stderr].filter(Boolean).join('\n'));
+
+    if (/\b--prompt\b/.test(combined)) {
+      _mistralPromptFlag = '--prompt';
+      return _mistralPromptFlag;
+    }
+
+    if (/(^|\s)-p(?:[\s,\]])/.test(combined) || /\[-p\s+\[TEXT\]\]/.test(combined)) {
+      _mistralPromptFlag = '-p';
+      return _mistralPromptFlag;
+    }
+
+    _mistralPromptFlag = '-p';
+    return _mistralPromptFlag;
+  })();
+
+  try {
+    return await _mistralPromptFlagPromise;
+  } finally {
+    _mistralPromptFlagPromise = null;
+  }
 }
 
 async function checkAgentInstallation(backend, opts = {}) {
@@ -1076,48 +1137,94 @@ class VibeRunner extends AgentRunner {
     this._stopped = false;
     this._resetResponseStreams();
     const { prompt } = normalizeRunInput(input);
-    const env = buildAgentEnv();
-    this._proc = spawn('vibe', ['--prompt', prompt, '--output', 'streaming'], {
-      cwd: this._cwd,
-      env,
-      windowsHide: true,
-      shell: process.platform === 'win32',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
 
-    this._emit('milestone', 'Vibe starting', 'Initializing agent…');
+    (async () => {
+      const env = buildAgentEnv({ TERM: 'dumb', NO_COLOR: '1' });
+      const promptFlag = await resolveMistralPromptFlag();
+      let cmd = 'vibe';
+      let args = [promptFlag, prompt, '--output', 'streaming', '--workdir', this._cwd];
+      let shell = false;
+      let spawnCwd = this._cwd;
 
-    let buffer = '';
-
-    this._proc.stdout.on('data', (chunk) => {
-      buffer += chunk.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        const clean = line.trim();
-        if (clean) this._parseLine(clean);
+      if (process.platform === 'win32') {
+        env.SCREENAI_MISTRAL_PROMPT = prompt;
+        env.SCREENAI_MISTRAL_PROMPT_FLAG = promptFlag;
+        env.SCREENAI_MISTRAL_WORKDIR = this._cwd;
+        cmd = 'powershell.exe';
+        args = [
+          '-NoProfile',
+          '-Command',
+          [
+            '$mistralArgs = @($env:SCREENAI_MISTRAL_PROMPT_FLAG, $env:SCREENAI_MISTRAL_PROMPT, "--output", "streaming", "--workdir", $env:SCREENAI_MISTRAL_WORKDIR)',
+            '& vibe @mistralArgs',
+          ].join('; '),
+        ];
+        shell = false;
+        spawnCwd = process.cwd();
       }
-    });
 
-    this._proc.stderr.on('data', (chunk) => {
-      const msg = chunk.toString().trim();
-      if (msg) console.log('[Vibe stderr]', msg);
-    });
+      if (this._stopped) return;
 
-    this._proc.on('error', (err) => {
-      const isNotFound = err.code === 'ENOENT';
-      this._emit('error',
-        isNotFound ? 'Vibe not installed' : 'Vibe error',
-        isNotFound ? 'Run: npm install -g @mistral-ai/vibe' : err.message,
-      );
-    });
+      this._proc = spawn(cmd, args, {
+        cwd: spawnCwd,
+        env,
+        windowsHide: true,
+        shell,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
 
-    this._proc.on('close', (code) => {
-      if (buffer.trim()) this._parseLine(buffer.trim());
-      if (code !== 0 && code !== null) {
-        this._emit('error', 'Vibe exited', `Exit code ${code}`);
+      this._emit('milestone', 'Mistral starting', 'Initializing agent…');
+
+      let buffer = '';
+      let stderrBuffer = '';
+
+      this._proc.stdout.on('data', (chunk) => {
+        buffer += chunk.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          const clean = stripAnsi(line).trim();
+          if (clean) this._parseLine(clean);
+        }
+      });
+
+      this._proc.stderr.on('data', (chunk) => {
+        const msg = stripAnsi(chunk.toString()).trim();
+        if (msg) {
+          stderrBuffer += msg + '\n';
+          console.log('[Mistral stderr]', msg);
+        }
+      });
+
+      this._proc.on('error', (err) => {
+        const isNotFound = err.code === 'ENOENT';
+        this._emit('error',
+          isNotFound ? 'Mistral not installed' : 'Mistral error',
+          isNotFound ? 'Use INSTALL to set up Mistral.' : err.message,
+        );
+      });
+
+      this._proc.on('close', (code) => {
+        if (buffer.trim()) this._parseLine(stripAnsi(buffer).trim());
+        if (!this._stopped && code !== 0 && code !== null) {
+          const stderrDetail = stderrBuffer
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .pop();
+          this._emit(
+            'error',
+            'Mistral exited',
+            stderrDetail ? `Exit code ${code}: ${stderrDetail}` : `Exit code ${code}`,
+          );
+        }
+        this.emit('done');
+      });
+    })().catch((err) => {
+      if (!this._stopped) {
+        this._emit('error', 'Mistral error', err.message);
+        this.emit('done');
       }
-      this.emit('done');
     });
   }
 

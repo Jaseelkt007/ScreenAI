@@ -60,6 +60,7 @@ const { Narrator }                                              = require('./nar
 const APP_ICON = nativeImage.createFromPath(
   path.join(__dirname, '../assets/icons/icon.png')
 );
+const VIBE_INSTALL_DOCS_URL = 'https://docs.mistral.ai/mistral-vibe/introduction/install';
 
 // Voice replies in guide / HUD windows start without a direct user click, so
 // Chromium needs autoplay permission for media playback.
@@ -78,6 +79,7 @@ let agentHudWindow   = null;
 let _activeRunner  = null;
 let _narrator      = null;
 let _activeAgentScratchDir = null;
+let _activeAgentScratchDirEphemeral = true;
 
 // In-flight screenshot buffers
 let fullScreenBuffer = null;
@@ -267,6 +269,38 @@ async function onHotkeyTriggered() {
     dialog.showErrorBox('Screen AI Assistant', err.message);
     closeAll();
   }
+}
+
+function getPersistentMistralWorkDir() {
+  const dir = path.join(app.getPath('userData'), 'mistral-agent-workdir');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function buildMistralScreenContext(guide) {
+  const sections = [];
+  const summary = typeof guide?.summary === 'string' ? guide.summary.trim() : '';
+  const spokenSummary = typeof guide?.spoken_summary === 'string' ? guide.spoken_summary.trim() : '';
+
+  if (summary) sections.push(`Visible screen summary: ${summary}`);
+  else if (spokenSummary) sections.push(`Visible screen summary: ${spokenSummary}`);
+
+  if (Array.isArray(guide?.steps) && guide.steps.length) {
+    sections.push([
+      'Visible on-screen guidance:',
+      ...guide.steps.slice(0, 6).map((step, index) => {
+        const title = String(step?.title || `Step ${index + 1}`).trim();
+        const instruction = String(step?.instruction || '').trim();
+        return `${index + 1}. ${title}${instruction ? `: ${instruction}` : ''}`;
+      }),
+    ].join('\n'));
+  }
+
+  if (typeof guide?.overall_confidence === 'number') {
+    sections.push(`Vision confidence: ${guide.overall_confidence.toFixed(2)}`);
+  }
+
+  return sections.join('\n\n');
 }
 
 // ─── Voice hotkey trigger ─────────────────────────────────────────────────
@@ -924,10 +958,13 @@ function stopActiveRunner() {
     _narrator = null;
   }
   if (_activeAgentScratchDir) {
-    try {
-      fs.rmSync(_activeAgentScratchDir, { recursive: true, force: true });
-    } catch {}
+    if (_activeAgentScratchDirEphemeral) {
+      try {
+        fs.rmSync(_activeAgentScratchDir, { recursive: true, force: true });
+      } catch {}
+    }
     _activeAgentScratchDir = null;
+    _activeAgentScratchDirEphemeral = true;
   }
 }
 
@@ -1007,9 +1044,16 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
     if (mistralKey) process.env.MISTRAL_API_KEY = mistralKey;
   }
 
-  _activeAgentScratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'screenai-agent-'));
+  if (backend === 'vibe') {
+    _activeAgentScratchDir = getPersistentMistralWorkDir();
+    _activeAgentScratchDirEphemeral = false;
+  } else {
+    _activeAgentScratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'screenai-agent-'));
+    _activeAgentScratchDirEphemeral = true;
+  }
   console.log('[Agent] Scratch dir:', _activeAgentScratchDir);
   let imagePaths = [];
+  let mistralScreenContext = '';
 
   if (backend === 'codex' && screenshotBuffer?.length) {
     try {
@@ -1019,6 +1063,18 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
       console.log(`[Agent] Attached screenshot for Codex: ${path.basename(screenshotPath)}`);
     } catch (err) {
       console.warn('[Agent] Screenshot attach failed (non-fatal):', err.message);
+    }
+  }
+
+  if (backend === 'vibe' && screenshotBuffer?.length) {
+    try {
+      const guide = await getVoiceGuide(screenshotBuffer, transcript);
+      mistralScreenContext = buildMistralScreenContext(guide);
+      if (mistralScreenContext) {
+        console.log('[Agent] Prepared screen context for Mistral');
+      }
+    } catch (err) {
+      console.warn('[Agent] Screen context prep for Mistral failed (non-fatal):', err.message);
     }
   }
 
@@ -1039,8 +1095,12 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
   } else {
     agentPrompt = [
       'You are acting as a desktop screen assistant, not as a repository coding agent.',
-      'This backend is running without image attachments in this app.',
-      'Answer the user request directly, and clearly say when screen-specific details are unavailable.',
+      mistralScreenContext
+        ? 'A screenshot is not attached directly to this backend, so the app has already analyzed the screen for you. Treat the screen context below as the primary source of truth for what is visible.'
+        : 'No screenshot-derived context is available for this request.',
+      mistralScreenContext || 'If the user asks about visible UI details, say the screen context is unavailable.',
+      'Answer the user request directly based on the provided screen context when it is available.',
+      'If the screen context does not contain the needed detail, say that clearly instead of guessing.',
       'Do not ask what to do with the current directory.',
       'Do not inspect, edit, or discuss local project files unless the user explicitly asks for coding or terminal help.',
       `User request: ${transcript}`,
@@ -1236,6 +1296,7 @@ ipcMain.on('agent:telemetry', (_event, { level, message }) => {
 // ─── IPC: check agent installation ────────────────────────────────────────
 
 ipcMain.handle('agent:check', async (_event, backend) => {
+  patchProcessPath();
   return checkAgentInstallation(backend, { force: true });
 });
 
@@ -1265,23 +1326,113 @@ ipcMain.handle('agent:auth-codex', async () => {
   return { ok: true };
 });
 
+function quoteForShellSingle(value) {
+  return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function escapeForAppleScript(value) {
+  return String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"');
+}
+
+function getVibeUnixInstallScript() {
+  return [
+    'if command -v curl >/dev/null 2>&1; then',
+    '  curl -LsSf https://mistral.ai/vibe/install.sh | bash',
+    'elif command -v uv >/dev/null 2>&1; then',
+    '  uv tool install mistral-vibe',
+    'elif command -v python3 >/dev/null 2>&1; then',
+    '  python3 -m pip install --user mistral-vibe',
+    'elif command -v pip >/dev/null 2>&1; then',
+    '  pip install --user mistral-vibe',
+    'else',
+    '  printf "%s\\n" "Mistral is not installed through npm."',
+    '  printf "%s\\n" "Install Python 3.12+ or uv, then rerun this step."',
+    `  printf "%s\\n" "Docs: ${VIBE_INSTALL_DOCS_URL}"`,
+    'fi',
+  ].join('\n');
+}
+
+function getVibeWindowsInstallCommand() {
+  const script = [
+    '$uv = Get-Command uv -ErrorAction SilentlyContinue',
+    'if ($uv) { uv tool install mistral-vibe; exit $LASTEXITCODE }',
+    '$py = Get-Command py -ErrorAction SilentlyContinue',
+    'if ($py) { py -m pip install --user mistral-vibe; exit $LASTEXITCODE }',
+    '$python = Get-Command python -ErrorAction SilentlyContinue',
+    'if ($python) { python -m pip install --user mistral-vibe; exit $LASTEXITCODE }',
+    '$pip = Get-Command pip -ErrorAction SilentlyContinue',
+    'if ($pip) { pip install --user mistral-vibe; exit $LASTEXITCODE }',
+    "Write-Host 'Mistral is not installed through npm.' -ForegroundColor Yellow",
+    "Write-Host 'Install Python 3.12+ or uv, then rerun this step.' -ForegroundColor Yellow",
+    `Write-Host 'Docs: ${VIBE_INSTALL_DOCS_URL}' -ForegroundColor Cyan`,
+  ].join('; ');
+  return `start "" powershell -NoExit -ExecutionPolicy Bypass -Command "${script}"`;
+}
+
+function openMacTerminal(exec, command, onError) {
+  const appleScriptCommand = escapeForAppleScript(command);
+  exec(
+    `osascript -e 'tell application "Terminal" to activate' -e 'tell application "Terminal" to do script "${appleScriptCommand}"'`,
+    { shell: true },
+    onError,
+  );
+}
+
 ipcMain.handle('agent:install', async (_event, backend) => {
   const { exec } = require('child_process');
   const name = (backend || 'codex').toLowerCase();
-  const pkg = name === 'vibe' ? '@mistral-ai/vibe' : '@openai/codex';
+  const logInstallError = (err) => {
+    if (err) console.error('[Agent] install error:', err.message);
+  };
+
+  if (name === 'vibe') {
+    const unixScript = getVibeUnixInstallScript();
+
+    if (process.platform === 'win32') {
+      exec(getVibeWindowsInstallCommand(), { shell: true }, logInstallError);
+    } else if (process.platform === 'darwin') {
+      openMacTerminal(exec, unixScript, (err) => {
+        if (err) {
+          exec(`/bin/bash -lc ${quoteForShellSingle(unixScript)}`, { shell: true }, logInstallError);
+        }
+      });
+    } else {
+      exec(
+        `x-terminal-emulator -e /bin/bash -lc ${quoteForShellSingle(`${unixScript}\nexec /bin/bash`)}`,
+        { shell: true },
+        (err) => {
+          if (err) {
+            exec(`/bin/bash -lc ${quoteForShellSingle(unixScript)}`, { shell: true }, logInstallError);
+          }
+        },
+      );
+    }
+
+    return { ok: true };
+  }
+
+  const pkg = '@openai/codex';
 
   if (process.platform === 'win32') {
-    exec(`start "" cmd /k npm install -g ${pkg}`, { shell: true });
+    exec(`start "" cmd /k npm install -g ${pkg}`, { shell: true }, logInstallError);
   } else if (process.platform === 'darwin') {
-    exec(`open -a Terminal -e "npm install -g ${pkg}"`);
-  } else {
-    exec(`x-terminal-emulator -e sh -lc "npm install -g ${pkg}; exec sh"`, (err) => {
+    openMacTerminal(exec, `npm install -g ${pkg}`, (err) => {
       if (err) {
-        exec(`npm install -g ${pkg}`, (fallbackErr) => {
-          if (fallbackErr) console.error('[Agent] install error:', fallbackErr.message);
-        });
+        exec(`/bin/bash -lc ${quoteForShellSingle(`npm install -g ${pkg}`)}`, { shell: true }, logInstallError);
       }
     });
+  } else {
+    exec(
+      `x-terminal-emulator -e /bin/bash -lc ${quoteForShellSingle(`npm install -g ${pkg}\nexec /bin/bash`)}`,
+      { shell: true },
+      (err) => {
+        if (err) {
+          exec(`/bin/bash -lc ${quoteForShellSingle(`npm install -g ${pkg}`)}`, { shell: true }, logInstallError);
+        }
+      },
+    );
   }
 
   return { ok: true };
