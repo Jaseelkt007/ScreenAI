@@ -52,6 +52,7 @@ async function synthesizeSpeech(text, opts = {}) {
         stability:        0.5,
         similarity_boost: 0.75,
       },
+      speed:         1.15,
       output_format: 'mp3_44100_128',
     }),
   });
@@ -104,6 +105,7 @@ async function streamSpeech(text, onChunk, opts = {}) {
         stability:        0.5,
         similarity_boost: 0.75,
       },
+      speed:         1.15,
       output_format: 'mp3_44100_128',
     }),
   });

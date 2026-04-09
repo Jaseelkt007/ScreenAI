@@ -1,5 +1,6 @@
 'use strict';
 
+const hudEl         = document.getElementById('hud');
 const agentNameEl   = document.getElementById('agent-name');
 const phaseBadge    = document.getElementById('phase-badge');
 const statusTextEl  = document.getElementById('status-text');
@@ -20,6 +21,7 @@ let currentAudioUrl = null;
 let audioQueue = [];
 let audioPlaying = false;
 let lastReplayBytes = null;
+let responseStreaming = false;
 
 const PHASE_MAP = {
   idle:       { cls: 'phase-idle',       label: 'STANDBY',    status: 'Standing by for the next request.' },
@@ -34,9 +36,29 @@ const PHASE_MAP = {
 
 function setPhase(phase, detail = '') {
   const config = PHASE_MAP[phase] || PHASE_MAP.idle;
+
+  // Drive orb colors via data-phase attribute
+  hudEl.dataset.phase = phase;
+
   phaseBadge.className = config.cls;
   phaseBadge.textContent = config.label;
-  statusTextEl.textContent = detail || config.status;
+
+  // Animated state text transition
+  const newText = detail || config.status;
+  if (statusTextEl.textContent === newText) return;
+
+  statusTextEl.classList.remove('state-enter');
+  statusTextEl.classList.add('state-exit');
+
+  setTimeout(() => {
+    statusTextEl.textContent = newText;
+    statusTextEl.classList.remove('state-exit');
+    void statusTextEl.offsetHeight; // force reflow
+    statusTextEl.classList.add('state-enter');
+    statusTextEl.addEventListener('animationend', () => {
+      statusTextEl.classList.remove('state-enter');
+    }, { once: true });
+  }, 220);
 }
 
 function setVoiceState(mode, text = '') {
@@ -105,17 +127,34 @@ function addFeedRow(event) {
   feedWrap.scrollTop = feedWrap.scrollHeight;
 }
 
-function showResponse(text) {
+function isNearBottom(element, threshold = 36) {
+  return (element.scrollHeight - element.scrollTop - element.clientHeight) <= threshold;
+}
+
+function showResponse(text, options = {}) {
+  const { streaming = false, final = false } = options;
   finalizeActiveRow(false);
-  responseLabel.textContent = 'Briefing';
-  if (typeof window.renderMarkdown === 'function') {
-    responseText.innerHTML = window.renderMarkdown(text || '');
+  const shouldFollow = responsePanel.classList.contains('hidden') || isNearBottom(responseText);
+
+  responseStreaming = streaming && !final;
+  responsePanel.classList.toggle('is-streaming', responseStreaming);
+  responseText.classList.toggle('is-streaming', responseStreaming);
+  responseLabel.textContent = responseStreaming ? 'Briefing Live' : 'Briefing';
+
+  if (responseStreaming) {
+    responseText.textContent = text || '';
   } else {
-    responseText.textContent = text;
+    if (typeof window.renderMarkdown === 'function') {
+      responseText.innerHTML = window.renderMarkdown(text || '');
+    } else {
+      responseText.textContent = text;
+    }
   }
   responsePanel.classList.remove('hidden');
-  responsePanel.scrollTop = 0;
-  responseText.scrollTop = 0;
+  hudEl.classList.add('has-response');
+  if (shouldFollow) {
+    responseText.scrollTop = responseText.scrollHeight;
+  }
 }
 
 function bytesFromBase64(base64) {
@@ -240,8 +279,15 @@ window.electronAPI.onAgentEvent((event) => {
       break;
 
     case 'response':
-      setPhase('responding');
-      showResponse(event.detail || event.label || '');
+      if (event.streaming === true && event.final !== true) {
+        setPhase('responding', 'Streaming the briefing into the console.');
+      } else {
+        setPhase('responding');
+      }
+      showResponse(event.detail || event.label || '', {
+        streaming: event.streaming === true,
+        final: event.final === true,
+      });
       break;
 
     case 'error':
@@ -263,10 +309,15 @@ window.electronAPI.onAgentDone(() => {
 
 window.electronAPI.onAgentInit((data) => {
   agentNameEl.textContent = (data.assistantName || 'JARVIS').toUpperCase();
+  hudEl.dataset.phase = 'idle';
+  hudEl.classList.remove('has-response');
   setPhase('idle');
   feed.innerHTML = '<div id="feed-empty">Standing by…</div>';
   responsePanel.classList.add('hidden');
   responseText.textContent = '';
+  responsePanel.classList.remove('is-streaming');
+  responseText.classList.remove('is-streaming');
+  responseStreaming = false;
   replayBtn.classList.add('hidden');
   audioQueue = [];
   audioPlaying = false;

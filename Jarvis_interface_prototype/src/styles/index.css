@@ -1,0 +1,149 @@
+@import './fonts.css';
+@import './tailwind.css';
+@import './theme.css';
+
+/* JARVIS Global Styles */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: #020b18;
+  font-family: 'Rajdhani', sans-serif;
+  overflow: hidden;
+}
+
+/* Orb Core Animations */
+@keyframes orbIdlePulse {
+  0%, 100% { transform: scale(1); opacity: 0.7; }
+  50% { transform: scale(1.06); opacity: 1; }
+}
+
+@keyframes orbListenPulse {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.12); opacity: 1; }
+}
+
+@keyframes orbSpeakVibrate {
+  0% { transform: scale(1) translate(0, 0); }
+  10% { transform: scale(1.04) translate(-1px, 1px); }
+  20% { transform: scale(0.98) translate(1px, -1px); }
+  30% { transform: scale(1.06) translate(-1px, -1px); }
+  40% { transform: scale(0.97) translate(1px, 1px); }
+  50% { transform: scale(1.05) translate(-2px, 1px); }
+  60% { transform: scale(0.99) translate(2px, -1px); }
+  70% { transform: scale(1.04) translate(-1px, 2px); }
+  80% { transform: scale(0.98) translate(1px, -2px); }
+  90% { transform: scale(1.03) translate(-1px, 1px); }
+  100% { transform: scale(1) translate(0, 0); }
+}
+
+@keyframes ringRotateCW {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes ringRotateCCW {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(-360deg); }
+}
+
+@keyframes radarSweep {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 0 20px rgba(0, 180, 255, 0.3), 0 0 60px rgba(0, 100, 255, 0.2), 0 0 100px rgba(0, 60, 200, 0.1); }
+  50% { box-shadow: 0 0 40px rgba(0, 212, 255, 0.6), 0 0 80px rgba(0, 130, 255, 0.4), 0 0 140px rgba(0, 80, 220, 0.2); }
+}
+
+@keyframes glowPulseStrong {
+  0%, 100% { box-shadow: 0 0 40px rgba(0, 212, 255, 0.6), 0 0 100px rgba(0, 150, 255, 0.4), 0 0 160px rgba(0, 100, 220, 0.3); }
+  50% { box-shadow: 0 0 60px rgba(0, 230, 255, 0.9), 0 0 130px rgba(0, 180, 255, 0.6), 0 0 200px rgba(0, 130, 255, 0.4); }
+}
+
+@keyframes glowPulseAct {
+  0%, 100% { box-shadow: 0 0 40px rgba(255, 120, 0, 0.5), 0 0 100px rgba(255, 80, 0, 0.3), 0 0 160px rgba(200, 50, 0, 0.2); }
+  50% { box-shadow: 0 0 70px rgba(255, 150, 50, 0.8), 0 0 140px rgba(255, 100, 30, 0.5), 0 0 220px rgba(220, 70, 10, 0.3); }
+}
+
+@keyframes glowPulseDone {
+  0%, 100% { box-shadow: 0 0 40px rgba(0, 255, 160, 0.5), 0 0 100px rgba(0, 220, 120, 0.3), 0 0 160px rgba(0, 180, 80, 0.2); }
+  50% { box-shadow: 0 0 70px rgba(0, 255, 180, 0.8), 0 0 140px rgba(0, 240, 140, 0.5), 0 0 220px rgba(0, 200, 100, 0.3); }
+}
+
+@keyframes rippleOut {
+  0% { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeSlideDown {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-10px); }
+}
+
+@keyframes particleFloat {
+  0%, 100% { transform: translateY(0) translateX(0) scale(1); opacity: 0.3; }
+  33% { transform: translateY(-20px) translateX(10px) scale(1.1); opacity: 0.6; }
+  66% { transform: translateY(10px) translateX(-8px) scale(0.9); opacity: 0.2; }
+}
+
+@keyframes scanLine {
+  0% { transform: translateY(-100%); opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { transform: translateY(100vh); opacity: 0; }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@keyframes waveBar {
+  0%, 100% { transform: scaleY(0.2); }
+  50% { transform: scaleY(1); }
+}
+
+@keyframes cornerGlow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
+@keyframes dataFlicker {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 0.4; }
+  75% { opacity: 0.9; }
+}
+
+/* Utility Classes */
+.font-orbitron { font-family: 'Orbitron', monospace; }
+.font-rajdhani { font-family: 'Rajdhani', sans-serif; }
+.font-exo { font-family: 'Exo 2', sans-serif; }
+
+.animate-orb-idle { animation: orbIdlePulse 3s ease-in-out infinite; }
+.animate-orb-listen { animation: orbListenPulse 1.5s ease-in-out infinite; }
+.animate-orb-vibrate { animation: orbSpeakVibrate 0.3s ease-in-out infinite; }
+.animate-glow-idle { animation: glowPulse 3s ease-in-out infinite; }
+.animate-glow-listen { animation: glowPulseStrong 1.5s ease-in-out infinite; }
+.animate-glow-act { animation: glowPulseAct 1s ease-in-out infinite; }
+.animate-glow-done { animation: glowPulseDone 2s ease-in-out infinite; }
+.animate-ring-cw-slow { animation: ringRotateCW 8s linear infinite; }
+.animate-ring-cw-medium { animation: ringRotateCW 4s linear infinite; }
+.animate-ring-cw-fast { animation: ringRotateCW 2s linear infinite; }
+.animate-ring-ccw-slow { animation: ringRotateCCW 10s linear infinite; }
+.animate-ring-ccw-medium { animation: ringRotateCCW 5s linear infinite; }
+.animate-ring-ccw-fast { animation: ringRotateCCW 2.5s linear infinite; }
+.animate-radar { animation: radarSweep 3s linear infinite; }
+.animate-radar-fast { animation: radarSweep 1.5s linear infinite; }
+.animate-ripple { animation: rippleOut 2s ease-out infinite; }
+.animate-blink { animation: blink 1.2s ease-in-out infinite; }
+.animate-slide-up { animation: fadeSlideUp 0.4s ease-out forwards; }
+.animate-corner-glow { animation: cornerGlow 2s ease-in-out infinite; }
+.animate-data-flicker { animation: dataFlicker 3s ease-in-out infinite; }

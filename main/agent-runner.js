@@ -547,6 +547,9 @@ class AgentRunner extends EventEmitter {
     this._proc = null;
     this._stopped = false;
     this._cwd = options.cwd || process.cwd();
+    this._lastResponseText = '';
+    this._responseStreams = new Map();
+    this._unknownResponseTypes = new Set();
   }
 
   /**
@@ -567,6 +570,54 @@ class AgentRunner extends EventEmitter {
 
   _emit(type, label, detail = '', raw = null) {
     this.emit('event', { type, label, detail, raw });
+  }
+
+  _emitResponseSnapshot(text, raw = null, options = {}) {
+    const normalized = String(text || '').replace(/\r\n/g, '\n').trim();
+    if (!normalized) return;
+
+    const isFinal = options.final === true;
+    if (!isFinal && normalized === this._lastResponseText) return;
+
+    this._lastResponseText = normalized;
+    this.emit('event', {
+      type: 'response',
+      label: 'Response',
+      detail: normalized,
+      raw,
+      streaming: !isFinal,
+      final: isFinal,
+    });
+  }
+
+  _resetResponseStreams() {
+    this._lastResponseText = '';
+    this._responseStreams.clear();
+  }
+
+  _getResponseStreamKey(payload = {}) {
+    const itemId = payload.item_id || payload.item?.id || payload.id || 'default';
+    const outputIndex = payload.output_index ?? 0;
+    const contentIndex = payload.content_index ?? 0;
+    return `${itemId}:${outputIndex}:${contentIndex}`;
+  }
+
+  _appendResponseDelta(payload, delta, raw = null) {
+    const chunk = String(delta || '');
+    if (!chunk) return;
+    const key = this._getResponseStreamKey(payload);
+    const previous = this._responseStreams.get(key) || '';
+    const next = previous + chunk;
+    this._responseStreams.set(key, next);
+    this._emitResponseSnapshot(next, raw, { final: false });
+  }
+
+  _setResponseStreamText(payload, text, raw = null, options = {}) {
+    const snapshot = String(text || '');
+    if (!snapshot.trim()) return;
+    const key = this._getResponseStreamKey(payload);
+    this._responseStreams.set(key, snapshot);
+    this._emitResponseSnapshot(snapshot, raw, { final: options.final === true });
   }
 
   _classifyTool(toolName) {
@@ -593,6 +644,7 @@ class AgentRunner extends EventEmitter {
 class CodexRunner extends AgentRunner {
   run(input) {
     this._stopped = false;
+    this._resetResponseStreams();
     const { prompt, imagePaths } = normalizeRunInput(input);
 
     (async () => {
@@ -664,11 +716,9 @@ class CodexRunner extends AgentRunner {
         shell,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
-      this._emit(
-        'milestone',
-        'Processing request',
-        'Right away, sir. Give me a second while I look this over.'
-      );
+      // Silent milestone — just updates the HUD feed, no TTS so the
+      // rate-limit window stays clear for the actual response audio.
+      this.emit('event', { type: 'milestone', label: 'Processing request', detail: 'Working on it…', silent: true, raw: null });
 
       let buffer = '';
       let stderrBuffer = '';
@@ -780,7 +830,7 @@ class CodexRunner extends AgentRunner {
 
     // Substantial lines that look like a final response
     if (line.length > 40 && !/^[#>*\-=\[\]{}]/.test(line)) {
-      this._emit('response', 'Response', line);
+      this._emitResponseSnapshot(line, null, { final: false });
     }
   }
 
@@ -809,6 +859,57 @@ class CodexRunner extends AgentRunner {
       return;
     }
 
+    if (type === 'response.output_text.delta') {
+      this._appendResponseDelta(obj, obj.delta, obj);
+      return;
+    }
+
+    if (type === 'response.output_text.done') {
+      const text = typeof obj.text === 'string' ? obj.text : '';
+      if (text) this._setResponseStreamText(obj, text, obj, { final: false });
+      return;
+    }
+
+    if (type === 'response.content_part.done') {
+      const part = obj.part || {};
+      const text =
+        typeof part.text === 'string' ? part.text :
+        typeof part.content === 'string' ? part.content :
+        '';
+      if (text) this._setResponseStreamText(obj, text, obj, { final: false });
+      return;
+    }
+
+    if (type === 'response.output_item.done') {
+      const item = obj.item || {};
+      const itemType = String(item.type || item.item_type || '').toLowerCase();
+      if (itemType === 'message' || itemType === 'assistant_message' || item.role === 'assistant') {
+        const text = this._extractItemText(item);
+        if (text) {
+          this._setResponseStreamText(
+            { ...obj, item_id: item.id || obj.item_id },
+            text,
+            obj,
+            { final: false }
+          );
+        }
+      }
+      return;
+    }
+
+    if (type === 'response.reasoning_summary_text.delta' || type === 'response.reasoning_text.delta') {
+      this._emit('thinking', 'Thinking', '', obj);
+      return;
+    }
+
+    if (type.startsWith('response.')) {
+      if (!this._unknownResponseTypes.has(type)) {
+        this._unknownResponseTypes.add(type);
+        console.warn(`[AgentEnv] Unhandled Codex response event type: ${type}`);
+      }
+      return;
+    }
+
     if (type === 'item.started' || type === 'item.updated' || type === 'item.completed') {
       this._handleItemEvent(type, obj.item || {}, obj);
       return;
@@ -816,7 +917,7 @@ class CodexRunner extends AgentRunner {
 
     if (type === 'agent_message' || type === 'assistant_message') {
       const text = this._extractItemText(obj);
-      if (text) this._emit('response', 'Response', text, obj);
+      if (text) this._emitResponseSnapshot(text, obj, { final: false });
       return;
     }
 
@@ -843,12 +944,23 @@ class CodexRunner extends AgentRunner {
       if (typeof obj.content === 'string') {
         text = obj.content;
       } else if (Array.isArray(obj.content)) {
-        text = obj.content.filter(c => c.type === 'text').map(c => c.text).join('');
+        text = obj.content
+          .filter((c) => !c?.type || c.type === 'text' || c.type === 'output_text')
+          .map((c) => {
+            if (typeof c === 'string') return c;
+            if (typeof c?.text === 'string') return c.text;
+            if (typeof c?.delta === 'string') return c.delta;
+            if (typeof c?.content === 'string') return c.content;
+            return '';
+          })
+          .join('');
       } else if (typeof obj.text === 'string') {
         text = obj.text;
+      } else if (typeof obj.delta === 'string') {
+        text = obj.delta;
       }
       if (text && obj.role !== 'tool') {
-        this._emit('response', 'Response', text, obj);
+        this._emitResponseSnapshot(text, obj, { final: false });
       }
     }
   }
@@ -859,8 +971,8 @@ class CodexRunner extends AgentRunner {
 
     if (itemType === 'agent_message' || itemType === 'assistant_message') {
       const text = this._extractItemText(item);
-      if (text && eventType === 'item.completed') {
-        this._emit('response', 'Response', text, raw);
+      if (text && (eventType === 'item.updated' || eventType === 'item.completed')) {
+        this._emitResponseSnapshot(text, raw, { final: false });
       }
       return;
     }
@@ -935,12 +1047,16 @@ class CodexRunner extends AgentRunner {
 
   _extractItemText(item) {
     if (typeof item?.text === 'string') return item.text;
+    if (typeof item?.delta === 'string') return item.delta;
     if (typeof item?.message === 'string') return item.message;
     if (Array.isArray(item?.content)) {
       return item.content
         .map((part) => {
           if (typeof part === 'string') return part;
-          return part?.text || '';
+          if (typeof part?.text === 'string') return part.text;
+          if (typeof part?.delta === 'string') return part.delta;
+          if (typeof part?.content === 'string') return part.content;
+          return '';
         })
         .join('');
     }
@@ -958,6 +1074,7 @@ class CodexRunner extends AgentRunner {
 class VibeRunner extends AgentRunner {
   run(input) {
     this._stopped = false;
+    this._resetResponseStreams();
     const { prompt } = normalizeRunInput(input);
     const env = buildAgentEnv();
     this._proc = spawn('vibe', ['--prompt', prompt, '--output', 'streaming'], {
@@ -1042,12 +1159,18 @@ class VibeRunner extends AgentRunner {
         text = obj.content;
       } else if (Array.isArray(obj.content)) {
         text = obj.content
-          .filter(c => c.type === 'text')
-          .map(c => c.text)
+          .filter((c) => !c?.type || c.type === 'text' || c.type === 'output_text')
+          .map((c) => {
+            if (typeof c === 'string') return c;
+            if (typeof c?.text === 'string') return c.text;
+            if (typeof c?.delta === 'string') return c.delta;
+            if (typeof c?.content === 'string') return c.content;
+            return '';
+          })
           .join('');
       }
       if (text) {
-        this._emit('response', 'Response', text, obj);
+        this._emitResponseSnapshot(text, obj, { final: false });
       }
     }
   }

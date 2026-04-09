@@ -889,22 +889,28 @@ function openAgentHudWindow(backend) {
     console.log('[Agent] HUD shown for backend:', backend);
   });
 
-  agentHudWindow.webContents.once('did-finish-load', () => {
-    if (agentHudWindow && !agentHudWindow.isDestroyed()) {
-      _agentHudReady = true;
-      console.log(`[PERF] agent-hud-ready: ${Date.now() - hudOpenedAt}ms  (agent HUD created → renderer ready)`);
-      agentHudWindow.webContents.send('agent:init', {
-        backend,
-        assistantName: 'JARVIS',
-      });
-      flushAgentHudBuffer();
-    }
-  });
-
   agentHudWindow.on('closed', () => {
     resetAgentHudBuffer();
     agentHudWindow = null;
     stopActiveRunner();
+  });
+
+  // Return a Promise that resolves once the renderer is fully ready.
+  // runAgentPipeline awaits this so streaming events always go directly
+  // to a live window — never buffered and batch-flushed.
+  return new Promise((resolve) => {
+    agentHudWindow.webContents.once('did-finish-load', () => {
+      if (agentHudWindow && !agentHudWindow.isDestroyed()) {
+        _agentHudReady = true;
+        console.log(`[PERF] agent-hud-ready: ${Date.now() - hudOpenedAt}ms  (agent HUD created → renderer ready)`);
+        agentHudWindow.webContents.send('agent:init', {
+          backend,
+          assistantName: 'JARVIS',
+        });
+        flushAgentHudBuffer();
+      }
+      resolve();
+    });
   });
 }
 
@@ -989,8 +995,11 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
     voiceHudWindow = null;
   }
 
-  // Open Agent HUD
-  openAgentHudWindow(backend);
+  // Open Agent HUD and wait until its renderer is ready.
+  // Awaiting here ensures every streaming event goes directly to a live
+  // window rather than accumulating in _agentHudBuffer and being flushed
+  // all at once — which was making the output appear "printed at once".
+  await openAgentHudWindow(backend);
 
   // Set Mistral API key in env if using Vibe
   if (backend === 'vibe') {
@@ -1055,8 +1064,9 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
     }
   });
 
-  // Accumulate response fragments into one final text
-  let responseChunks = [];
+  // Keep the latest streamed response snapshot so the HUD can update live
+  // while TTS still speaks only once on the finalized answer.
+  let latestResponseText = '';
   const agentStartedAt = Date.now();
   let firstAgentEventLogged = false;
   let firstResponseLogged = false;
@@ -1081,6 +1091,7 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
     console.log(`[Agent] Event: ${event.type} — ${event.label} ${event.detail ? event.detail.slice(0, 80) : ''}`);
 
     if (event.type === 'response') {
+      const detail = typeof event.detail === 'string' ? event.detail : '';
       if (!firstResponseLogged) {
         firstResponseLogged = true;
         clearPendingProgressTimers();
@@ -1092,7 +1103,11 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
           console.log(`[PERF] hotkey→agent-response: ${Date.now() - _voicePerfOrigin}ms`);
         }
       }
-      responseChunks.push(event.detail || '');
+      latestResponseText = detail;
+      queueAgentHudMessage('agent:event', {
+        ...event,
+        detail,
+      });
       return;
     }
 
@@ -1108,13 +1123,15 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
     console.log(`[PERF] transcript→agent-done: ${transcriptToDoneMs}ms  (text received by agent pipeline → done)`);
     console.log(`[PERF] agent-total: ${agentTotalMs}ms  (runner start → done)`);
 
-    const fullResponse = responseChunks.join('\n').trim();
+    const fullResponse = latestResponseText.trim();
     if (fullResponse) {
       const responseEvent = {
         type: 'response',
         label: 'Response',
         detail: fullResponse,
         spokenText: buildJarvisResponseSpeech(fullResponse),
+        final: true,
+        streaming: false,
       };
       queueAgentHudMessage('agent:event', responseEvent);
       if (_narrator) _narrator.feed(responseEvent);
@@ -1140,8 +1157,8 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
     emitAgentEvent({
       type: 'milestone',
       label: 'Scanning screen',
-      detail: 'Right away, sir. I am checking the screen now.',
-      spokenText: 'Right away, sir. I am checking the screen now.',
+      detail: 'Scanning the screen…',
+      silent: true,  // no TTS — keep rate-limit clear for the response audio
     });
 
     try {
@@ -1179,13 +1196,13 @@ async function runAgentPipeline(transcript, screenshotBuffer) {
     scheduleProgressUpdate(4200, () => ({
       type: 'milestone',
       label: 'Still working',
-      detail: 'Taking a bit longer than usual, but I am still on it.',
+      detail: 'Taking a bit longer than usual…',
       spokenText: 'Give me a second, sir. I am still looking through it.',
     }));
     scheduleProgressUpdate(9000, () => ({
       type: 'milestone',
       label: 'Finishing analysis',
-      detail: 'Almost there. I am pulling the answer together now.',
+      detail: 'Almost there…',
       spokenText: 'Almost there, sir. I am putting the answer together now.',
     }));
   }
