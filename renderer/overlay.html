@@ -8,120 +8,130 @@
   <link rel="stylesheet" href="overlay.css" />
 </head>
 <body>
-  <div id="app">
+  <div id="hud" data-state="idle">
+    <div id="bg-field" aria-hidden="true">
+      <div class="bg-radial-top"></div>
+      <div class="bg-radial-bottom"></div>
+      <div class="corner-dec tl"></div>
+      <div class="corner-dec tr"></div>
+      <div class="corner-dec bl"></div>
+      <div class="corner-dec br"></div>
+      <div class="scan-line"></div>
+    </div>
 
-    <!-- ── Header ────────────────────────────────────────────────────────── -->
-    <div id="header">
-      <div id="header-left">
-        <!-- Filled dot logo + wordmark -->
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="none"
-             xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <circle cx="5" cy="5" r="4" fill="#00c8ef" fill-opacity="0.85"/>
-          <circle cx="5" cy="5" r="2" fill="#fff" fill-opacity="0.6"/>
-        </svg>
-        <span id="title">ScreenAI</span>
+    <header id="header">
+      <div id="brand">
+        <div id="brand-mark" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+            <polygon points="11,1.5 20.5,6.5 20.5,15.5 11,20.5 1.5,15.5 1.5,6.5"
+              stroke="currentColor" stroke-width="1.2" fill="none" />
+            <circle cx="11" cy="11" r="3.5" fill="currentColor" />
+          </svg>
+        </div>
+        <div id="brand-copy">
+          <div id="brand-kicker">SCREEN ANALYSIS</div>
+          <div id="brand-name">ScreenAI</div>
+        </div>
       </div>
 
-      <div id="header-right">
-        <!-- Turn counter badge (hidden until first turn) -->
+      <div id="phase-badge" class="phase-idle">CAPTURE READY</div>
+
+      <div id="header-actions">
         <div id="turn-counter" class="hidden" title="Conversation turns used">
           <span id="turns-used">0</span><span class="turns-sep">/</span><span id="turns-max">3</span>
         </div>
 
-        <!-- Theme toggle: shows moon in dark mode, sun in light mode -->
-        <button id="theme-btn" title="Toggle light / dark theme" aria-label="Toggle theme">
-          <!-- Moon (shown when dark) -->
-          <svg class="icon-moon" width="13" height="13" viewBox="0 0 13 13" fill="none">
-            <path d="M11 8.5A5.5 5.5 0 0 1 4.5 2a5.5 5.5 0 1 0 6.5 6.5z"
-                  fill="currentColor"/>
-          </svg>
-          <!-- Sun (shown when light) -->
-          <svg class="icon-sun" width="13" height="13" viewBox="0 0 13 13" fill="none">
-            <circle cx="6.5" cy="6.5" r="2.5" fill="currentColor"/>
-            <path d="M6.5 1v1.5M6.5 10.5V12M1 6.5h1.5M10.5 6.5H12
-                     M2.93 2.93l1.06 1.06M9.01 9.01l1.06 1.06
-                     M2.93 10.07l1.06-1.06M9.01 3.99l1.06-1.06"
-                  stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-          </svg>
-        </button>
-
-        <!-- Close -->
         <button id="close-btn" title="Close (Esc)" aria-label="Close">
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-            <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" stroke-width="1.5"
-                  stroke-linecap="round"/>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+            <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" />
           </svg>
         </button>
       </div>
-    </div>
+    </header>
 
-    <!-- ── Split main area ───────────────────────────────────────────────── -->
-    <div id="main">
-
-      <!-- LEFT: Screenshot context ─────────────────────────────────────── -->
-      <div id="left-panel">
-        <div id="screenshot-frame">
-          <img id="screenshot-img" alt="Captured screen region" />
-          <!-- Retake: compact icon overlay in the top-right corner -->
-          <button id="retake-btn" title="Capture a new region (closes this panel)" aria-label="Retake screenshot">
-            <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-              <path d="M9.5 5.5A4 4 0 1 1 8 2.1" stroke="currentColor"
-                    stroke-width="1.4" stroke-linecap="round"/>
-              <path d="M8 1v2H6" stroke="currentColor" stroke-width="1.4"
-                    stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
+    <main id="layout">
+      <section id="visual-panel" class="panel">
+        <div class="panel-header">
+          <span class="panel-label">VISUAL CONTEXT</span>
+          <button id="retake-btn" class="panel-action" title="Capture a new region (closes this panel)" aria-label="Retake screenshot">
+            RETAKE
           </button>
         </div>
-      </div>
 
-      <!-- RIGHT: Conversation ──────────────────────────────────────────── -->
-      <div id="right-panel">
-
-        <!-- Chat scroll area -->
-        <div id="chat-messages">
-          <div id="placeholder">
-            <svg width="28" height="28" viewBox="0 0 28 28" fill="none"
-                 aria-hidden="true" style="margin-bottom:8px;opacity:0.18">
-              <rect x="2" y="2" width="24" height="24" rx="6"
-                    stroke="currentColor" stroke-width="1.5"/>
-              <path d="M9 14h10M14 9v10" stroke="currentColor" stroke-width="1.5"
-                    stroke-linecap="round"/>
-            </svg>
-            <p>Ask anything about what's on screen.</p>
-            <p>
-              <kbd>&#9166;</kbd> to ask
-              &nbsp;&middot;&nbsp;
-              <kbd>Shift</kbd><kbd>&#9166;</kbd> for new line
-            </p>
-          </div>
+        <div id="screenshot-frame">
+          <div class="frame-corner tl" aria-hidden="true"></div>
+          <div class="frame-corner tr" aria-hidden="true"></div>
+          <div class="frame-corner bl" aria-hidden="true"></div>
+          <div class="frame-corner br" aria-hidden="true"></div>
+          <div class="frame-scan" aria-hidden="true"></div>
+          <img id="screenshot-img" alt="Captured screen region" />
         </div>
 
-        <!-- Input footer (fixed at bottom of right panel) -->
-        <div id="input-footer">
-          <div id="input-row">
-            <textarea
-              id="question-input"
-              placeholder="Ask about this screen…"
-              rows="1"
-              spellcheck="false"
-              autofocus
-            ></textarea>
-            <button id="send-btn" aria-label="Send">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M1 7h12M7 1l6 6-6 6" stroke="currentColor" stroke-width="1.5"
-                      stroke-linecap="round" stroke-linejoin="round"/>
+        <div id="visual-footer">
+          <div id="capture-chip">REGION LOCKED</div>
+          <p id="capture-note">Responses stay grounded to this exact screenshot.</p>
+        </div>
+      </section>
+
+      <section id="analysis-column">
+        <section id="conversation-panel" class="panel">
+          <div class="panel-header">
+            <span id="conversation-label" class="panel-label">ANALYSIS FEED</span>
+            <span id="conversation-meta" class="panel-meta">Awaiting prompt</span>
+          </div>
+
+          <div id="chat-messages">
+            <div id="placeholder">
+              <div id="placeholder-badge">STANDBY</div>
+              <svg id="placeholder-mark" width="56" height="56" viewBox="0 0 56 56" fill="none" aria-hidden="true">
+                <circle cx="28" cy="28" r="20" stroke="currentColor" stroke-opacity="0.2" stroke-width="1.5" />
+                <circle cx="28" cy="28" r="10" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.5" />
+                <path d="M28 8v8M28 40v8M8 28h8M40 28h8" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" stroke-linecap="round" />
+                <circle cx="28" cy="28" r="3" fill="currentColor" fill-opacity="0.75" />
               </svg>
-            </button>
+              <p class="placeholder-title">Ask about the selected region.</p>
+              <p class="placeholder-copy">ScreenAI will keep the answer tied to this capture, whether you need UI explanation, extraction, debugging help, or next steps.</p>
+              <p class="placeholder-hint">
+                <kbd>&#9166;</kbd> to send
+                <span class="hint-sep">&middot;</span>
+                <kbd>Shift</kbd><kbd>&#9166;</kbd> for new line
+              </p>
+            </div>
           </div>
-          <div id="input-hints">
-            <span><kbd>&#9166;</kbd> to ask</span>
-            <span><kbd>Shift</kbd> + <kbd>&#9166;</kbd> for new line</span>
+        </section>
+
+        <section id="composer-panel" class="panel">
+          <div class="panel-header panel-header-compact">
+            <span class="panel-label">PROMPT CONSOLE</span>
+            <span id="input-meta" class="panel-meta">Enter to transmit</span>
           </div>
-        </div>
 
-      </div>
-    </div>
+          <div id="input-footer">
+            <div id="input-row">
+              <textarea
+                id="question-input"
+                placeholder="Ask about this screen..."
+                rows="1"
+                spellcheck="false"
+                autofocus
+              ></textarea>
+              <button id="send-btn" aria-label="Send">
+                <span class="btn-text">ANALYZE</span>
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                  <path d="M1 7h12M7 1l6 6-6 6" stroke="currentColor" stroke-width="1.5"
+                        stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </button>
+            </div>
 
+            <div id="input-hints">
+              <span><kbd>&#9166;</kbd> to ask</span>
+              <span><kbd>Shift</kbd> + <kbd>&#9166;</kbd> for new line</span>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
   </div>
 
   <script src="markdown.js"></script>

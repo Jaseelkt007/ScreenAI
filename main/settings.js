@@ -50,7 +50,7 @@ function getDefaults() {
   return {
     geminiApiKey:        '',
     openaiApiKey:        '',
-    geminiModel:         'gemini-2.5-flash-preview-04-17',
+    geminiModel:         'gemini-3.1-flash-lite-preview',
     customHotkey:        '',
     startWithOS:         true,
     firstRun:            true,
@@ -101,7 +101,10 @@ function getOpenAIKey() {
 
 /** Get the effective model name. */
 function getModel() {
-  return getSetting('geminiModel', '') || process.env.GEMINI_MODEL || 'gemini-2.5-flash-preview-04-17';
+  const model = getSetting('geminiModel', '') || process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite-preview';
+  return model === 'gemini-2.5-flash-preview-04-17'
+    ? 'gemini-3.1-flash-lite-preview'
+    : model;
 }
 
 /** Get ElevenLabs API key. */

@@ -485,7 +485,11 @@ ipcMain.on('capture:cancel', closeAll);
 
 function openOverlayWindow(logicalRegion) {
   const { workAreaSize } = screen.getPrimaryDisplay();
-  const W = 720, H = 520, GAP = 12;
+  const GAP = 12;
+  const maxW = Math.max(420, workAreaSize.width - GAP * 2);
+  const maxH = Math.max(420, workAreaSize.height - GAP * 2);
+  const W = Math.min(maxW, Math.max(820, Math.round(workAreaSize.width * 0.58)));
+  const H = Math.min(maxH, Math.max(560, Math.round(workAreaSize.height * 0.72)));
 
   let x = logicalRegion.x + logicalRegion.width + GAP;
   let y = logicalRegion.y;
@@ -511,6 +515,10 @@ function openOverlayWindow(logicalRegion) {
   overlayWindow.once('ready-to-show', () => {
     overlayWindow.show();
     overlayWindow.focus();
+  });
+
+  overlayWindow.webContents.once('did-finish-load', () => {
+    if (!overlayWindow || overlayWindow.isDestroyed() || !croppedBuffer) return;
     const imageDataUrl = `data:image/png;base64,${croppedBuffer.toString('base64')}`;
     overlayWindow.webContents.send('overlay:init', { imageDataUrl });
   });

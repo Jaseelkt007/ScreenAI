@@ -28,7 +28,7 @@ desktop.ini
 *.swp
 *.swo
 *~
-
+.claude/
 # electron-builder cache
 .cache/
 buildResources/

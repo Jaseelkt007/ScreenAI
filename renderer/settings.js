@@ -69,13 +69,15 @@ window.electronAPI.settingsGet().then((s) => {
     if (welcomeEl) welcomeEl.classList.remove('hidden');
   }
 
-  // Model dropdown — upgrade stale model name saved from old version
-  const STALE_MODELS = { 'gemini-3-flash-preview': 'gemini-2.5-flash-preview-04-17' };
-  const rawModel = s.geminiModel || 'gemini-2.5-flash-preview-04-17';
+  // Model dropdown — upgrade stale or removed model names saved from old versions
+  const STALE_MODELS = {
+    'gemini-2.5-flash-preview-04-17': 'gemini-3.1-flash-lite-preview',
+  };
+  const rawModel = s.geminiModel || 'gemini-3.1-flash-lite-preview';
   const savedModel = STALE_MODELS[rawModel] || rawModel;
   const opt = modelSelect.querySelector(`option[value="${savedModel}"]`);
   if (opt) modelSelect.value = savedModel;
-  else modelSelect.value = 'gemini-2.5-flash-preview-04-17';
+  else modelSelect.value = 'gemini-3.1-flash-lite-preview';
   updateOpenAIKeyVisibility();
 
   // Capture hotkey

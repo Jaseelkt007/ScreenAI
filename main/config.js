@@ -59,7 +59,7 @@ const config = {
    * Gemini model to use.
    * gemini-2.0-flash is fast and multimodal — ideal for screen analysis.
    */
-  geminiModel: process.env.GEMINI_MODEL || 'gemini-3-flash-preview',
+  geminiModel: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite-preview',
 };
 
 module.exports = config;
