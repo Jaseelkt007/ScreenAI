@@ -10,7 +10,8 @@
     "prebuild:win": "node scripts/create-icon.js",
     "prebuild:mac": "node scripts/create-icon.js",
     "prebuild": "node scripts/create-icon.js",
-    "build:win": "electron-builder --win",
+    "build:win": "electron-builder --win -c.win.signAndEditExecutable=false",
+    "build:win:full": "electron-builder --win",
     "build:mac": "electron-builder --mac",
     "build": "electron-builder --win --mac"
   },
@@ -18,7 +19,7 @@
     "form-data": "^4.0.5",
     "jimp": "0.22.12",
     "node-fetch": "2.7.0",
-    "screenshot-desktop": "1.15.0"
+    "screenshot-desktop": "^1.15.3"
   },
   "devDependencies": {
     "electron": "^29.4.6",

@@ -1,6 +1,24 @@
 'use strict';
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
+// Agent subsystem refs (declared up top so loadSettings can reference them)
+const agentEnabledCheckbox  = document.getElementById('agent-enabled-checkbox');
+const agentSettingsSection  = document.getElementById('agent-settings-section');
+const agentBackendSelect    = document.getElementById('agent-backend-select');
+const codexSection          = document.getElementById('codex-section');
+const vibeSection           = document.getElementById('vibe-section');
+const codexCheckBtn         = document.getElementById('codex-check-btn');
+const codexInstallBtn       = document.getElementById('codex-install-btn');
+const codexAuthBtn          = document.getElementById('codex-auth-btn');
+const codexStatus           = document.getElementById('codex-status');
+const vibeCheckBtn          = document.getElementById('vibe-check-btn');
+const vibeInstallBtn        = document.getElementById('vibe-install-btn');
+const vibeStatus            = document.getElementById('vibe-status');
+const mistralKeyInput       = document.getElementById('mistral-key-input');
+const toggleMistralVisBtn   = document.getElementById('toggle-mistral-visibility');
+const mistralLink           = document.getElementById('mistral-link');
+
+
 const apiKeyInput          = document.getElementById('api-key-input');
 const modelSelect          = document.getElementById('model-select');
 const openaiKeySection     = document.getElementById('openai-key-section');
@@ -34,6 +52,10 @@ let recordingHotkey      = false;
 let currentHotkey        = '';   // empty string = use platform defaults (F7)
 let recordingVoiceHotkey = false;
 let currentVoiceHotkey   = '';   // empty string = use platform defaults (F8)
+let mistralInstallMonitor = null;
+
+const MISTRAL_INSTALL_POLL_MS = 3000;
+const MISTRAL_INSTALL_TIMEOUT_MS = 180000;
 
 // ── Load current settings on open ─────────────────────────────────────────
 window.electronAPI.settingsGet().then((s) => {
@@ -41,11 +63,21 @@ window.electronAPI.settingsGet().then((s) => {
   openaiKeyInput.value    = s.openaiApiKey  || '';
   startupCheckbox.checked = s.startWithOS   !== false;
 
-  // Model dropdown
-  const savedModel = s.geminiModel || 'gemini-3-flash-preview';
+  // Show first-run welcome bar
+  if (s.firstRun !== false) {
+    const welcomeEl = document.getElementById('welcome');
+    if (welcomeEl) welcomeEl.classList.remove('hidden');
+  }
+
+  // Model dropdown — upgrade stale or removed model names saved from old versions
+  const STALE_MODELS = {
+    'gemini-2.5-flash-preview-04-17': 'gemini-3.1-flash-lite-preview',
+  };
+  const rawModel = s.geminiModel || 'gemini-3.1-flash-lite-preview';
+  const savedModel = STALE_MODELS[rawModel] || rawModel;
   const opt = modelSelect.querySelector(`option[value="${savedModel}"]`);
   if (opt) modelSelect.value = savedModel;
-  else modelSelect.value = 'gemini-3-flash-preview';
+  else modelSelect.value = 'gemini-3.1-flash-lite-preview';
   updateOpenAIKeyVisibility();
 
   // Capture hotkey
@@ -59,6 +91,12 @@ window.electronAPI.settingsGet().then((s) => {
   currentVoiceHotkey           = s.voiceHotkey || '';
   voiceHotkeyDisplay.textContent = currentVoiceHotkey || 'F8';
   updateVoiceSettingsVisibility();
+
+  // Agent settings
+  agentEnabledCheckbox.checked = s.agentEnabled === true;
+  agentBackendSelect.value     = s.agentBackend || 'codex';
+  mistralKeyInput.value        = s.mistralApiKey || '';
+  updateAgentSections();
 });
 
 // ── Model dropdown → show/hide OpenAI key ─────────────────────────────────
@@ -243,6 +281,10 @@ saveBtn.addEventListener('click', async () => {
     elevenlabsApiKey: elevenlabsKeyInput.value.trim(),
     voiceHotkey:      currentVoiceHotkey,
     voiceId:          voiceIdInput.value.trim() || 'JBFqnCBsd6RMkjVDRZzb',
+    // Agent subsystem
+    agentEnabled:     agentEnabledCheckbox.checked,
+    agentBackend:     agentBackendSelect.value,
+    mistralApiKey:    mistralKeyInput.value.trim(),
   });
 
   if (result.ok) {
@@ -257,6 +299,165 @@ saveBtn.addEventListener('click', async () => {
 
 // ── Cancel ─────────────────────────────────────────────────────────────────
 cancelBtn.addEventListener('click', () => window.electronAPI.settingsClose());
+
+// ── Agent subsystem ────────────────────────────────────────────────────────
+
+agentEnabledCheckbox.addEventListener('change', updateAgentSections);
+agentBackendSelect.addEventListener('change', updateAgentSections);
+
+function updateAgentSections() {
+  agentSettingsSection.classList.toggle('hidden', !agentEnabledCheckbox.checked);
+  const isVibe = agentBackendSelect.value === 'vibe';
+  codexSection.classList.toggle('hidden', isVibe);
+  vibeSection.classList.toggle('hidden', !isVibe);
+}
+
+function setMistralStatus(text, color = '') {
+  vibeStatus.textContent = text;
+  vibeStatus.style.color = color;
+}
+
+function renderMistralCheckResult(result) {
+  if (result.installed) {
+    setMistralStatus('✓ Installed' + (result.version ? ' · ' + result.version : ''), '#86efac');
+    return;
+  }
+  setMistralStatus('✗ Not found — click INSTALL to set up Mistral', '#fca5a5');
+}
+
+function stopMistralInstallMonitor() {
+  if (mistralInstallMonitor) {
+    clearTimeout(mistralInstallMonitor);
+    mistralInstallMonitor = null;
+  }
+  vibeInstallBtn.disabled = false;
+}
+
+async function monitorMistralInstall(startedAt = Date.now()) {
+  let result;
+  try {
+    result = await window.electronAPI.agentCheck('vibe');
+  } catch (err) {
+    stopMistralInstallMonitor();
+    setMistralStatus(`✗ ${err.message || 'Unable to verify Mistral setup.'}`, '#fca5a5');
+    return;
+  }
+
+  if (result.installed) {
+    stopMistralInstallMonitor();
+    renderMistralCheckResult(result);
+    return;
+  }
+
+  if (Date.now() - startedAt >= MISTRAL_INSTALL_TIMEOUT_MS) {
+    stopMistralInstallMonitor();
+    setMistralStatus('Installer opened. Finish setup in the terminal, then click CHECK.', '#f59e0b');
+    return;
+  }
+
+  setMistralStatus('Installer opened. Waiting for Mistral…', '#f59e0b');
+  mistralInstallMonitor = setTimeout(() => {
+    monitorMistralInstall(startedAt);
+  }, MISTRAL_INSTALL_POLL_MS);
+}
+
+// Check Codex installation
+codexCheckBtn.addEventListener('click', async () => {
+  codexStatus.textContent = 'Checking…';
+  codexStatus.style.color = '';
+  const result = await window.electronAPI.agentCheck('codex');
+  if (result.installed) {
+    const runtime = result.runtime === 'wsl' ? 'WSL' : 'native';
+    const auth =
+      result.authenticated === true ? ' · Logged in'
+      : result.authenticated === false ? ' · Not signed in'
+      : '';
+    codexStatus.textContent =
+      `✓ Installed (${runtime})` +
+      (result.version ? ' · ' + result.version : '') +
+      auth;
+    codexStatus.style.color = '#86efac';
+  } else {
+    codexStatus.textContent = '✗ Not found — install Codex or use your WSL runtime';
+    codexStatus.style.color = '#fca5a5';
+  }
+});
+
+codexInstallBtn.addEventListener('click', async () => {
+  codexStatus.textContent = 'Opening install terminal…';
+  codexStatus.style.color = '#f59e0b';
+  await window.electronAPI.agentInstall('codex');
+});
+
+// Launch codex auth in a terminal / browser
+codexAuthBtn.addEventListener('click', async () => {
+  codexStatus.textContent = 'Opening browser for ChatGPT sign-in…';
+  codexStatus.style.color = '#f59e0b';
+  const result = await window.electronAPI.agentAuthCodex();
+  if (result && result.ok === false) {
+    codexStatus.textContent = `✗ ${result.error || 'Codex is not installed.'}`;
+    codexStatus.style.color = '#fca5a5';
+  }
+});
+
+// Check Vibe installation
+vibeCheckBtn.addEventListener('click', async () => {
+  stopMistralInstallMonitor();
+  setMistralStatus('Checking…');
+  try {
+    const result = await window.electronAPI.agentCheck('vibe');
+    renderMistralCheckResult(result);
+  } catch (err) {
+    setMistralStatus(`✗ ${err.message || 'Unable to check Mistral.'}`, '#fca5a5');
+  }
+});
+
+vibeInstallBtn.addEventListener('click', async () => {
+  stopMistralInstallMonitor();
+  vibeInstallBtn.disabled = true;
+  setMistralStatus('Opening Mistral installer…', '#f59e0b');
+  const result = await window.electronAPI.agentInstall('vibe');
+  if (result && result.ok === false) {
+    stopMistralInstallMonitor();
+    setMistralStatus(`✗ ${result.error || 'Unable to launch Mistral installer.'}`, '#fca5a5');
+    return;
+  }
+  setMistralStatus('Installer opened. Waiting for Mistral…', '#f59e0b');
+  monitorMistralInstall();
+});
+
+// Mistral key visibility toggle
+toggleMistralVisBtn.addEventListener('click', () => {
+  const isPassword = mistralKeyInput.type === 'password';
+  mistralKeyInput.type = isPassword ? 'text' : 'password';
+});
+
+// Mistral console link
+mistralLink.addEventListener('click', () => {
+  window.electronAPI.openExternal('https://console.mistral.ai');
+});
+
+// ElevenLabs voice library link
+const elevenlabsVoicesLink = document.getElementById('elevenlabs-voices-link');
+if (elevenlabsVoicesLink) {
+  elevenlabsVoicesLink.addEventListener('click', () => {
+    window.electronAPI.openExternal('https://elevenlabs.io/voice-library');
+  });
+}
+
+// ── Tab switching ──────────────────────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const target = btn.dataset.tab;
+    document.querySelectorAll('.tab-btn').forEach((b) => {
+      b.classList.toggle('active', b === btn);
+      b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+    });
+    document.querySelectorAll('.tab-panel').forEach((p) => {
+      p.classList.toggle('hidden', p.id !== `tab-${target}`);
+    });
+  });
+});
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function showStatus(msg, type) {

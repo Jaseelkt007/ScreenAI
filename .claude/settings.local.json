@@ -20,7 +20,19 @@
       "Bash(grep -E \"\\(package\\\\.json|\\\\.js$\\)\")",
       "WebFetch(domain:elevenlabs.io)",
       "WebSearch",
-      "WebFetch(domain:api.elevenlabs.io)"
+      "WebFetch(domain:api.elevenlabs.io)",
+      "Bash(gh repo:*)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(wc -l /mnt/d/projects/Claude_UI/.claude/skills/security-review/*.md /mnt/d/projects/Claude_UI/.claude/commands/security-review.md)",
+      "Bash(grep -n \"innerHTML\\\\|innerText\\\\|outerHTML\\\\|insertAdjacentHTML\\\\|document\\\\.write\\\\|eval\\(\" renderer/*.js main/*.js)",
+      "Bash(grep -n \"spawn\\\\|exec\\\\|execSync\\\\|execFile\\\\|fork\" main/*.js)",
+      "Bash(grep -n \"electron\\\\|devtools\\\\|webviewTag\\\\|allowpopups\" main/*.js)",
+      "Bash(grep -v \"^#\\\\|^$\")",
+      "Bash(grep -n \"setCsp\\\\|Content-Security-Policy\\\\|csp\\\\|CSP\" main/*.js renderer/*.html)",
+      "Bash(npm audit:*)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('vulns:', d.get\\('metadata',{}\\).get\\('vulnerabilities',{}\\)\\)\")",
+      "Bash(python3 -c \" import sys, json d = json.load\\(sys.stdin\\) vulns = d.get\\('vulnerabilities', {}\\) for name, v in vulns.items\\(\\): sev = v.get\\('severity', ''\\) if sev in \\('critical', 'high', 'moderate'\\): via = v.get\\('via', []\\) titles = [x.get\\('title',''\\) if isinstance\\(x, dict\\) else str\\(x\\) for x in via] print\\(f'[{sev.upper\\(\\)}] {name}: {titles}'\\) \")"
     ]
   }
 }

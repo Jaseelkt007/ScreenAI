@@ -1,62 +1,82 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';" />
-  <title>Screen AI Assistant — Settings</title>
-  <link rel="stylesheet" href="settings.css" />
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';"/>
+  <title>JARVIS — Configuration</title>
+  <link rel="stylesheet" href="settings.css"/>
 </head>
 <body>
-  <div id="app">
+<div id="app">
 
-    <!-- ═══ HEADER ════════════════════════════════════════════════ -->
-    <div id="header">
-      <div class="scan-line"></div>
-      <div class="header-content">
-        <div class="header-icon">
-          <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
-            <polygon points="15,2 28,9 28,21 15,28 2,21 2,9"
-                     stroke="#00e5ff" stroke-width="1.4" fill="rgba(0,229,255,0.05)"/>
-            <polygon points="15,7 22,11 22,19 15,23 8,19 8,11"
-                     stroke="#00e5ff" stroke-width="0.8" stroke-dasharray="2 2" fill="none" opacity="0.4"/>
-            <circle cx="15" cy="15" r="3.5" fill="#00e5ff" opacity="0.95"/>
-            <circle cx="15" cy="15" r="6" stroke="#00e5ff" stroke-width="0.6" fill="none" opacity="0.25"/>
-          </svg>
-        </div>
-        <div class="header-text">
-          <div class="header-title">SCREEN<span class="cyan">AI</span></div>
-          <div class="header-sub">CONFIGURATION TERMINAL v1.0</div>
-        </div>
-        <div class="header-badge">
-          <span class="badge-dot"></span>
-          <span class="badge-label">ONLINE</span>
-        </div>
+  <!-- ── Header ──────────────────────────────────────────────────── -->
+  <header id="header">
+    <div class="scan-line"></div>
+    <div class="hdr-inner">
+      <div class="hdr-logo" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+          <polygon points="11,1.5 20.5,6.5 20.5,15.5 11,20.5 1.5,15.5 1.5,6.5"
+                   stroke="currentColor" stroke-width="1.2" fill="none"/>
+          <circle cx="11" cy="11" r="3.5" fill="currentColor"/>
+        </svg>
       </div>
-      <div class="header-divider"></div>
-    </div>
-
-    <!-- ═══ FIRST RUN WELCOME ══════════════════════════════════════ -->
-    <div id="welcome" class="info-bar">
-      <span class="info-chevron">▸</span>
-      <div>
-        <span>Initialize with your <strong>Gemini API key</strong> to activate.</span>
-        <span class="hint"> · <span class="link" id="api-link">aistudio.google.com/app/apikey</span></span>
+      <div class="hdr-text">
+        <div class="hdr-title">JARVIS <span class="hdr-sub-inline">CONFIGURATION</span></div>
+        <div class="hdr-sub">MARK VII · INITIALIZATION TERMINAL</div>
+      </div>
+      <div class="hdr-badge">
+        <span class="badge-dot"></span>
+        <span class="badge-label">ONLINE</span>
       </div>
     </div>
+    <div class="hdr-divider"></div>
+  </header>
 
-    <!-- ═══ SCROLL BODY ════════════════════════════════════════════ -->
-    <div class="scroll-body">
+  <!-- ── First-run bar (hidden until JS shows it) ─────────────────── -->
+  <div id="welcome" class="welcome-bar hidden">
+    <span class="welcome-arrow">▸</span>
+    <span>First time setup — configure your API keys below to get started.</span>
+  </div>
 
-      <!-- ─── CARD: AI CORE ──────────────────────────────────────── -->
-      <div class="card">
-        <div class="card-corner tl"></div>
-        <div class="card-corner br"></div>
-        <div class="card-stripe"></div>
-        <div class="card-tag">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
-            <circle cx="12" cy="12" r="3" fill="#00e5ff"/>
-            <path d="M12 2v4M12 18v4M2 12h4M18 12h4" stroke="#00e5ff" stroke-width="2" stroke-linecap="round"/>
+  <!-- ── Tab navigation ──────────────────────────────────────────── -->
+  <nav class="tab-nav" role="tablist">
+    <button class="tab-btn active" data-tab="core" role="tab" aria-selected="true">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="3" fill="currentColor"/>
+        <path d="M12 2v4M12 18v4M2 12h4M18 12h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      CORE
+    </button>
+    <button class="tab-btn" data-tab="voice" role="tab" aria-selected="false">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="9" y="2" width="6" height="11" rx="3" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M5 10a7 7 0 0 0 14 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <line x1="12" y1="17" x2="12" y2="21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+      VOICE
+    </button>
+    <button class="tab-btn" data-tab="agent" role="tab" aria-selected="false">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
+              stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      AGENT
+    </button>
+  </nav>
+
+  <!-- ── Tab body ─────────────────────────────────────────────────── -->
+  <div class="tab-body">
+
+    <!-- ════ CORE tab ═════════════════════════════════════════════════ -->
+    <div class="tab-panel active" id="tab-core" role="tabpanel">
+
+      <!-- AI Core section -->
+      <div class="section">
+        <div class="section-tag">
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" fill="currentColor"/>
+            <path d="M12 2v4M12 18v4M2 12h4M18 12h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
           </svg>
           AI CORE
         </div>
@@ -65,27 +85,31 @@
           <div class="field-label">GEMINI API KEY</div>
           <div class="input-row">
             <input type="password" id="api-key-input" placeholder="AIza..." autocomplete="off" spellcheck="false"/>
-            <button id="toggle-visibility" class="icon-btn" title="Show / hide key">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <button id="toggle-visibility" class="icon-btn" title="Toggle visibility" type="button">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
                 <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
                 <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>
               </svg>
             </button>
           </div>
+          <div class="field-hint"><span class="lnk" id="api-link">aistudio.google.com/app/apikey</span></div>
         </div>
 
         <div class="field">
           <div class="field-label">AI MODEL</div>
           <select id="model-select">
-            <optgroup label="Gemini Models">
-              <option value="gemini-3-flash-preview">Gemini 3 Flash Preview (Default)</option>
+            <optgroup label="Gemini  (recommended)">
+              <option value="gemini-3.1-flash-lite-preview">Gemini 3.1 Flash Lite Preview — recommended</option>
+              <option value="gemini-3-flash-preview">Gemini 3 Flash Preview</option>
+              <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
               <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+              <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
             </optgroup>
-            <optgroup label="OpenAI Models">
+            <optgroup label="OpenAI">
               <option value="gpt-4o">GPT-4o</option>
               <option value="gpt-4o-mini">GPT-4o Mini</option>
-              <option value="o1">o1</option>
               <option value="o3-mini">o3 Mini</option>
+              <option value="o1">o1</option>
             </optgroup>
           </select>
         </div>
@@ -94,28 +118,35 @@
           <div class="field-label">OPENAI API KEY</div>
           <div class="input-row">
             <input type="password" id="openai-key-input" placeholder="sk-..." autocomplete="off" spellcheck="false"/>
-            <button id="toggle-openai-visibility" class="icon-btn" title="Show / hide key">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <button id="toggle-openai-visibility" class="icon-btn" title="Toggle visibility" type="button">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
                 <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
                 <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>
               </svg>
             </button>
           </div>
-          <div class="hint">Get a key at <span class="link" id="openai-link">platform.openai.com/api-keys</span></div>
+          <div class="field-hint"><span class="lnk" id="openai-link">platform.openai.com/api-keys</span></div>
         </div>
       </div>
 
-      <!-- ─── CARD: SYSTEM ────────────────────────────────────────── -->
-      <div class="card">
-        <div class="card-corner tl"></div>
-        <div class="card-corner br"></div>
-        <div class="card-stripe"></div>
-        <div class="card-tag">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
-            <rect x="2" y="3" width="20" height="14" rx="2" stroke="#00e5ff" stroke-width="1.8"/>
-            <path d="M8 21h8M12 17v4" stroke="#00e5ff" stroke-width="1.8" stroke-linecap="round"/>
+      <!-- System section -->
+      <div class="section">
+        <div class="section-tag">
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M8 21h8M12 17v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
           </svg>
           SYSTEM
+        </div>
+
+        <div class="field">
+          <div class="field-label">SCREEN CAPTURE HOTKEY</div>
+          <div class="hotkey-row">
+            <div id="hotkey-display" class="hotkey-pill">F7</div>
+            <button id="record-hotkey-btn" class="action-btn" type="button">BIND</button>
+            <button id="reset-hotkey-btn" class="action-btn" type="button">RESET</button>
+          </div>
+          <div class="field-hint" id="hotkey-hint">Press BIND, then strike your key combination</div>
         </div>
 
         <div class="field">
@@ -125,105 +156,159 @@
             <span class="t-label">LAUNCH ON SYSTEM BOOT</span>
           </label>
         </div>
-
-        <div class="field">
-          <div class="field-label">SCREEN CAPTURE HOTKEY</div>
-          <div class="hotkey-row">
-            <div id="hotkey-display" class="hotkey-pill">F7</div>
-            <button id="record-hotkey-btn" class="ghost-btn">BIND</button>
-            <button id="reset-hotkey-btn" class="ghost-btn">RESET</button>
-          </div>
-          <div class="hint" id="hotkey-hint">Press BIND then strike your desired key combination</div>
-        </div>
       </div>
 
-      <!-- ─── JARVIS BANNER ───────────────────────────────────────── -->
-      <div class="jarvis-banner">
-        <div class="jb-line"></div>
-        <div class="jb-core">
-          <div class="jb-icon">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <rect x="9" y="2" width="6" height="11" rx="3" stroke="#c026d3" stroke-width="1.8"/>
-              <path d="M5 10a7 7 0 0 0 14 0" stroke="#c026d3" stroke-width="1.8" stroke-linecap="round"/>
-              <line x1="12" y1="16" x2="12" y2="21" stroke="#c026d3" stroke-width="1.8" stroke-linecap="round"/>
-              <line x1="8" y1="21" x2="16" y2="21" stroke="#c026d3" stroke-width="1.8" stroke-linecap="round"/>
-            </svg>
-          </div>
-          <span class="jb-text">J · A · R · V · I · S</span>
-        </div>
-        <div class="jb-line"></div>
-      </div>
+    </div><!-- /tab-core -->
 
-      <!-- ─── CARD: JARVIS ────────────────────────────────────────── -->
-      <div class="card card-j">
-        <div class="card-corner tl j"></div>
-        <div class="card-corner br j"></div>
-        <div class="card-stripe j"></div>
-        <div class="card-tag j-tag">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
-            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
-                  stroke="#c026d3" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- ════ VOICE tab ════════════════════════════════════════════════ -->
+    <div class="tab-panel hidden" id="tab-voice" role="tabpanel">
+
+      <!-- JARVIS activation + hotkey -->
+      <div class="section section-v">
+        <div class="section-tag tag-v">
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="9" y="2" width="6" height="11" rx="3" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M5 10a7 7 0 0 0 14 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
           </svg>
-          VOICE SUBSYSTEM
+          JARVIS VOICE SUBSYSTEM
         </div>
 
-        <!-- Activate toggle -->
         <div class="field">
           <label class="toggle-wrap" for="voice-enabled-checkbox">
-            <input type="checkbox" id="voice-enabled-checkbox" class="t-input j-input"/>
-            <span class="t-track j-track"><span class="t-thumb j-thumb"></span></span>
-            <span class="t-label">ACTIVATE JARVIS</span>
+            <input type="checkbox" id="voice-enabled-checkbox" class="t-input"/>
+            <span class="t-track t-v"><span class="t-thumb t-thumb-v"></span></span>
+            <span class="t-label lbl-v">ACTIVATE JARVIS</span>
           </label>
+          <div class="field-hint">Talk to JARVIS and get spoken responses hands-free.</div>
         </div>
 
-        <!-- ✦ JARVIS HOTKEY — always visible ✦ -->
         <div class="field">
-          <div class="field-label j-lbl">JARVIS HOTKEY</div>
+          <div class="field-label lbl-v-dim">JARVIS HOTKEY</div>
           <div class="hotkey-row">
-            <div id="voice-hotkey-display" class="hotkey-pill j-pill">F8</div>
-            <button id="record-voice-hotkey-btn" class="ghost-btn j-ghost">BIND</button>
-            <button id="reset-voice-hotkey-btn" class="ghost-btn">RESET</button>
+            <div id="voice-hotkey-display" class="hotkey-pill pill-v">F8</div>
+            <button id="record-voice-hotkey-btn" class="action-btn btn-v" type="button">BIND</button>
+            <button id="reset-voice-hotkey-btn" class="action-btn" type="button">RESET</button>
           </div>
         </div>
+      </div>
 
-        <!-- ElevenLabs + Voice ID (shown when Jarvis enabled) -->
-        <div id="voice-settings-section">
-          <div class="inner-sep"></div>
+      <!-- ElevenLabs integration (shown when voice enabled) -->
+      <div id="voice-settings-section">
+        <div class="section section-v">
+          <div class="section-tag tag-v">ELEVENLABS INTEGRATION</div>
 
           <div class="field">
-            <div class="field-label j-lbl">ELEVENLABS API KEY</div>
+            <div class="field-label lbl-v-dim">API KEY</div>
             <div class="input-row">
               <input type="password" id="elevenlabs-key-input" placeholder="sk_..." autocomplete="off" spellcheck="false"/>
-              <button id="toggle-el-visibility" class="icon-btn" title="Show / hide key">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <button id="toggle-el-visibility" class="icon-btn" title="Toggle visibility" type="button">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
                   <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>
                 </svg>
               </button>
             </div>
-            <div class="hint">Get a key at <span class="link" id="elevenlabs-link">elevenlabs.io/app/settings/api-keys</span></div>
+            <div class="field-hint"><span class="lnk" id="elevenlabs-link">elevenlabs.io/app/settings/api-keys</span></div>
           </div>
 
           <div class="field">
-            <div class="field-label j-lbl">VOICE MATRIX ID</div>
+            <div class="field-label lbl-v-dim">VOICE MATRIX ID</div>
             <input type="text" id="voice-id-input" placeholder="JBFqnCBsd6RMkjVDRZzb" autocomplete="off" spellcheck="false"/>
-            <div class="hint">ElevenLabs voice identifier for spoken synthesis</div>
+            <div class="field-hint"><span class="lnk" id="elevenlabs-voices-link">elevenlabs.io/voice-library</span></div>
           </div>
         </div>
       </div>
 
-    </div><!-- /scroll-body -->
+    </div><!-- /tab-voice -->
 
-    <!-- ═══ STATUS ════════════════════════════════════════════════ -->
-    <div id="status-bar" class="hidden"></div>
+    <!-- ════ AGENT tab ════════════════════════════════════════════════ -->
+    <div class="tab-panel hidden" id="tab-agent" role="tabpanel">
 
-    <!-- ═══ FOOTER BUTTONS ════════════════════════════════════════ -->
-    <div id="button-row">
-      <button id="cancel-btn" class="btn-ghost">ABORT</button>
-      <button id="save-btn" class="btn-primary">SAVE &amp; CLOSE</button>
-    </div>
+      <div class="section section-a">
+        <div class="section-tag tag-a">
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
+                  stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          AGENT SUBSYSTEM
+        </div>
 
-  </div><!-- /#app -->
-  <script src="settings.js"></script>
+        <div class="field">
+          <label class="toggle-wrap" for="agent-enabled-checkbox">
+            <input type="checkbox" id="agent-enabled-checkbox" class="t-input"/>
+            <span class="t-track t-a"><span class="t-thumb t-thumb-a"></span></span>
+            <span class="t-label lbl-a">ACTIVATE AGENT MODE</span>
+          </label>
+          <div class="field-hint">Handles complex, multi-step requests using an AI agent.</div>
+        </div>
+
+        <div id="agent-settings-section">
+          <div class="inner-sep"></div>
+
+          <div class="field">
+            <div class="field-label lbl-a-dim">AGENT BACKEND</div>
+            <select id="agent-backend-select">
+              <option value="codex">OpenAI (recommended)</option>
+              <option value="vibe">Mistral (free tier)</option>
+            </select>
+          </div>
+
+          <!-- Codex section -->
+          <div id="codex-section">
+            <div class="field">
+              <div class="field-label lbl-a-dim">OPENAI AUTHORIZATION</div>
+              <div class="btn-cluster">
+                <button id="codex-check-btn" class="action-btn" type="button">CHECK</button>
+                <button id="codex-install-btn" class="action-btn" type="button">INSTALL</button>
+                <button id="codex-auth-btn" class="action-btn btn-a" type="button">AUTHORIZE</button>
+              </div>
+              <div class="status-line" id="codex-status"></div>
+              <div class="field-hint">Requires a ChatGPT account. Sign in once via the AUTHORIZE button above.</div>
+            </div>
+          </div>
+
+          <!-- Vibe section -->
+          <div id="vibe-section" class="hidden">
+            <div class="field">
+              <div class="field-label lbl-a-dim">MISTRAL API KEY</div>
+              <div class="input-row">
+                <input type="password" id="mistral-key-input" placeholder="..." autocomplete="off" spellcheck="false"/>
+                <button id="toggle-mistral-visibility" class="icon-btn" title="Toggle visibility" type="button">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>
+                  </svg>
+                </button>
+              </div>
+              <div class="field-hint"><span class="lnk" id="mistral-link">console.mistral.ai</span></div>
+              <div class="field-hint">Requires the separate Mistral CLI. INSTALL sets it up.</div>
+            </div>
+            <div class="field">
+              <div class="btn-cluster">
+                <button id="vibe-check-btn" class="action-btn" type="button">CHECK</button>
+                <button id="vibe-install-btn" class="action-btn" type="button">INSTALL</button>
+              </div>
+              <div class="status-line" id="vibe-status"></div>
+            </div>
+          </div>
+
+        </div><!-- /agent-settings-section -->
+      </div>
+
+    </div><!-- /tab-agent -->
+
+  </div><!-- /tab-body -->
+
+  <!-- ── Status bar ───────────────────────────────────────────────── -->
+  <div id="status-bar" class="hidden"></div>
+
+  <!-- ── Footer buttons ───────────────────────────────────────────── -->
+  <div id="button-row">
+    <button id="cancel-btn" class="btn-ghost" type="button">ABORT</button>
+    <button id="save-btn" class="btn-primary" type="button">SAVE &amp; CLOSE</button>
+  </div>
+
+</div>
+<script src="settings.js"></script>
 </body>
 </html>

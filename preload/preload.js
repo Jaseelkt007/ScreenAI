@@ -117,4 +117,46 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Close the guide window */
   sendGuideClose: () =>
     ipcRenderer.send('guide:close'),
+
+  // ── Agent HUD window ──────────────────────────────────────────────────
+
+  /** Receive init data (backend name) when HUD opens */
+  onAgentInit: (cb) =>
+    ipcRenderer.on('agent:init', (_e, data) => cb(data)),
+
+  /** Receive a normalized agent event */
+  onAgentEvent: (cb) =>
+    ipcRenderer.on('agent:event', (_e, data) => cb(data)),
+
+  /** Agent run finished */
+  onAgentDone: (cb) =>
+    ipcRenderer.on('agent:done', () => cb()),
+
+  /** TTS subtitle update */
+  onAgentTts: (cb) =>
+    ipcRenderer.on('agent:tts', (_e, text) => cb(text)),
+
+  /** Receive TTS audio to play in the agent HUD */
+  onAgentPlayAudio: (cb) =>
+    ipcRenderer.on('agent:play-audio', (_e, data) => cb(data)),
+
+  /** User pressed Stop */
+  sendAgentStop: () =>
+    ipcRenderer.send('agent:stop'),
+
+  /** Renderer telemetry for hidden agent HUD issues such as audio playback */
+  sendAgentTelemetry: (level, message) =>
+    ipcRenderer.send('agent:telemetry', { level, message }),
+
+  /** Check if an agent CLI is installed. Returns Promise<{installed, version, runtime}> */
+  agentCheck: (backend) =>
+    ipcRenderer.invoke('agent:check', backend),
+
+  /** Launch codex auth (opens browser). Returns Promise<{ok}> */
+  agentAuthCodex: () =>
+    ipcRenderer.invoke('agent:auth-codex'),
+
+  /** Launch a terminal install flow for the selected backend. */
+  agentInstall: (backend) =>
+    ipcRenderer.invoke('agent:install', backend),
 });

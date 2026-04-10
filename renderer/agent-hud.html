@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:;"/>
+  <title>JARVIS</title>
+  <link rel="stylesheet" href="agent-hud.css"/>
+</head>
+<body>
+<div id="hud" data-phase="idle">
+
+  <!-- ── Ambient background ──────────────────────────────────── -->
+  <div id="bg-field" aria-hidden="true">
+    <div class="bg-radial-top"></div>
+    <div class="bg-radial-bottom"></div>
+    <div class="corner-dec tl"></div>
+    <div class="corner-dec tr"></div>
+    <div class="corner-dec bl"></div>
+    <div class="corner-dec br"></div>
+    <div class="scan-line"></div>
+  </div>
+
+  <!-- ── Header ─────────────────────────────────────────────── -->
+  <header id="header">
+    <div id="agent-badge">
+      <div id="agent-hex" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+          <polygon points="11,1.5 20.5,6.5 20.5,15.5 11,20.5 1.5,15.5 1.5,6.5"
+            stroke="currentColor" stroke-width="1.2" fill="none"/>
+          <circle cx="11" cy="11" r="3.5" fill="currentColor"/>
+        </svg>
+      </div>
+      <div id="agent-names">
+        <div id="agent-mark">MARK VII</div>
+        <div id="agent-name">JARVIS</div>
+      </div>
+    </div>
+
+    <div id="phase-badge" class="phase-idle">STANDBY</div>
+
+    <button id="close-btn" title="Terminate session">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+        <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+    </button>
+  </header>
+
+  <!-- ── Central agent presence ─────────────────────────────── -->
+  <section id="presence">
+
+    <!-- Animated orb -->
+    <div id="orb-wrap" aria-hidden="true">
+      <!-- Concentric rings (r4=outermost → r1=innermost) -->
+      <div class="orb-ring r4"></div>
+      <div class="orb-ring r3"></div>
+      <div class="orb-ring r2">
+        <!-- Tick marks at compass points -->
+        <div class="orb-tick tk-n"></div>
+        <div class="orb-tick tk-e"></div>
+        <div class="orb-tick tk-s"></div>
+        <div class="orb-tick tk-w"></div>
+      </div>
+      <!-- Radar sweep -->
+      <div class="orb-radar"></div>
+      <!-- Inner bright ring -->
+      <div class="orb-ring r1"></div>
+      <!-- Core -->
+      <div id="orb-core">
+        <div class="core-inner-glow"></div>
+        <div class="core-dot"></div>
+      </div>
+    </div>
+
+    <!-- State / status display below orb -->
+    <div id="state-display">
+      <div class="state-sep" aria-hidden="true">
+        <div class="sep-line"></div>
+        <div class="sep-diamond"></div>
+        <div class="sep-line"></div>
+      </div>
+      <div id="status-text">Standing by for the next request.</div>
+      <div id="state-dots" aria-hidden="true">
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ── Operations feed ────────────────────────────────────── -->
+  <section id="activity-panel">
+    <div class="activity-hdr">
+      <span class="activity-lbl">OPERATIONS</span>
+      <span class="activity-meta" id="activity-meta">Live feed</span>
+    </div>
+    <div id="feed-wrap">
+      <div id="feed"></div>
+    </div>
+  </section>
+
+  <!-- ── Response / briefing panel ──────────────────────────── -->
+  <section id="response-panel" class="hidden">
+    <div class="panel-header">
+      <div id="response-label" class="panel-label">Briefing</div>
+      <button id="replay-btn" class="panel-action hidden" title="Replay spoken answer">
+        Replay Voice
+      </button>
+    </div>
+    <div id="response-text"></div>
+  </section>
+
+  <!-- ── Footer: voice + control ────────────────────────────── -->
+  <footer id="footer">
+    <div id="voice-pill" class="voice-standby">
+      <div id="voice-bars" aria-hidden="true">
+        <span></span><span></span><span></span>
+        <span></span><span></span><span></span>
+      </div>
+      <span id="tts-text">Voice standby</span>
+    </div>
+    <button id="stop-btn">
+      <svg width="8" height="8" viewBox="0 0 18 18" fill="none">
+        <rect x="1" y="1" width="16" height="16" rx="2.5" fill="currentColor"/>
+      </svg>
+      ABORT
+    </button>
+  </footer>
+
+</div>
+<script src="markdown.js"></script>
+<script src="agent-hud.js"></script>
+</body>
+</html>
