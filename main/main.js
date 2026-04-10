@@ -27,8 +27,6 @@
  *   →  LLM structured guide  →  Guide window  →  ElevenLabs TTS
  */
 
-require('./config'); // Load .env into process.env early
-
 const {
   app,
   BrowserWindow,
@@ -37,6 +35,7 @@ const {
   dialog,
   shell,
   nativeImage,
+  session,
 } = require('electron');
 const fs = require('fs');
 const os = require('os');
@@ -61,6 +60,22 @@ const APP_ICON = nativeImage.createFromPath(
   path.join(__dirname, '../assets/icons/icon.png')
 );
 const VIBE_INSTALL_DOCS_URL = 'https://docs.mistral.ai/mistral-vibe/introduction/install';
+
+// ─── Security helpers ─────────────────────────────────────────────────────
+
+/**
+ * lockWindow — apply navigation guards to every BrowserWindow.
+ * Prevents renderer-side XSS or prompt-injection from navigating a window
+ * to a remote URL or spawning popup windows.
+ */
+function lockWindow(win) {
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('file://')) {
+      event.preventDefault();
+    }
+  });
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+}
 
 // Voice replies in guide / HUD windows start without a direct user click, so
 // Chromium needs autoplay permission for media playback.
@@ -195,6 +210,19 @@ function flushAgentHudBuffer() {
 app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock.hide();
 
+  // Session-level Content-Security-Policy — enforced before any renderer HTML
+  // is evaluated, so it cannot be overridden by page-level <meta> tags.
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:;",
+        ],
+      },
+    });
+  });
+
   // Patch PATH so child processes (codex, vibe) are discoverable.
   // Must run inside whenReady — execSync before event loop starts can hang on Windows.
   patchProcessPath();
@@ -234,8 +262,9 @@ function createBackgroundWindow() {
   backgroundWindow = new BrowserWindow({
     width: 1, height: 1, x: -200, y: -200,
     show: false, frame: false, skipTaskbar: true,
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
+  lockWindow(backgroundWindow);
   backgroundWindow.loadURL('about:blank');
   backgroundWindow.on('closed', () => {
     backgroundWindow = null;
@@ -374,9 +403,11 @@ function openSettingsWindow() {
       preload:          path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration:  false,
+      sandbox:          true,
     },
   });
 
+  lockWindow(settingsWindow);
   settingsWindow.setMenuBarVisibility(false);
   settingsWindow.loadFile(path.join(__dirname, '../renderer/settings.html'));
   settingsWindow.on('closed', () => { settingsWindow = null; });
@@ -413,7 +444,11 @@ ipcMain.handle('settings:save', (_event, partial) => {
 });
 
 ipcMain.on('settings:close', () => { if (settingsWindow) settingsWindow.close(); });
-ipcMain.on('open:external', (_e, url) => shell.openExternal(url));
+ipcMain.on('open:external', (_e, url) => {
+  if (typeof url === 'string' && /^https?:/i.test(url)) {
+    shell.openExternal(url);
+  }
+});
 
 // ─── Screenshot capture flow ──────────────────────────────────────────────
 
@@ -435,10 +470,11 @@ function openCaptureWindow() {
     hasShadow: false, focusable: true,
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
-      contextIsolation: true, nodeIntegration: false,
+      contextIsolation: true, nodeIntegration: false, sandbox: true,
     },
   });
 
+  lockWindow(captureWindow);
   captureWindow.setAlwaysOnTop(true, 'screen-saver');
   captureWindow.loadFile(path.join(__dirname, '../renderer/capture.html'));
 
@@ -505,10 +541,11 @@ function openOverlayWindow(logicalRegion) {
     icon: APP_ICON,
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
-      contextIsolation: true, nodeIntegration: false,
+      contextIsolation: true, nodeIntegration: false, sandbox: true,
     },
   });
 
+  lockWindow(overlayWindow);
   overlayWindow.setAlwaysOnTop(true, 'floating');
   overlayWindow.loadFile(path.join(__dirname, '../renderer/overlay.html'));
 
@@ -588,9 +625,11 @@ function openVoiceHudWindow() {
       preload:          path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration:  false,
+      sandbox:          true,
     },
   });
 
+  lockWindow(voiceHudWindow);
   voiceHudWindow.setAlwaysOnTop(true, 'screen-saver');
   voiceHudWindow.loadFile(path.join(__dirname, '../renderer/voice-hud.html'));
 
@@ -824,9 +863,11 @@ function openGuideWindow(data) {
       preload:          path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration:  false,
+      sandbox:          true,
     },
   });
 
+  lockWindow(guideWindow);
   guideWindow.setAlwaysOnTop(true, 'floating');
   guideWindow.loadFile(path.join(__dirname, '../renderer/guide.html'));
 
@@ -919,9 +960,11 @@ function openAgentHudWindow(backend) {
       preload:          path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration:  false,
+      sandbox:          true,
     },
   });
 
+  lockWindow(agentHudWindow);
   agentHudWindow.setAlwaysOnTop(true, 'floating');
   agentHudWindow.loadFile(path.join(__dirname, '../renderer/agent-hud.html'));
 

@@ -116,12 +116,26 @@ function _patchUnix() {
   }
 }
 
+// API keys that must never be forwarded to agent subprocesses.
+// Agents authenticate via their own OAuth/token flows — they do not need
+// the user's vision / TTS keys.
+const AGENT_BLOCKED_ENV_KEYS = new Set([
+  'GEMINI_API_KEY',
+  'OPENAI_API_KEY',
+  'ELEVENLABS_API_KEY',
+]);
+
 /**
- * buildAgentEnv() — Returns process.env (already patched by patchProcessPath).
- * Still accepts extra overrides (e.g. TERM=dumb for Codex).
+ * buildAgentEnv() — Returns a sanitized copy of process.env for agent
+ * subprocesses. Strips credentials that agents should never see, then
+ * merges any caller-supplied overrides (e.g. TERM=dumb for Codex).
  */
 function buildAgentEnv(extra = {}) {
-  return Object.keys(extra).length ? { ...process.env, ...extra } : process.env;
+  const base = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (!AGENT_BLOCKED_ENV_KEYS.has(k)) base[k] = v;
+  }
+  return Object.keys(extra).length ? { ...base, ...extra } : base;
 }
 
 /**

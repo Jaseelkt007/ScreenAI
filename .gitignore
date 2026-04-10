@@ -29,6 +29,7 @@ desktop.ini
 *.swo
 *~
 .claude/
+codex-skills/
 # electron-builder cache
 .cache/
 buildResources/

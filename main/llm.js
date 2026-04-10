@@ -67,14 +67,14 @@ async function streamGemini(imageBuffer, prompt, history, onChunk, model) {
     );
   }
 
-  const url = `${GEMINI_API_BASE}/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+  const url = `${GEMINI_API_BASE}/models/${model}:streamGenerateContent?alt=sse`;
   const body = buildGeminiBody(imageBuffer, prompt, history);
 
   console.log(`[LLM] Gemini stream → ${model}`);
 
   const response = await fetch(url, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body:    JSON.stringify(body),
   });
 
@@ -307,7 +307,7 @@ async function fetchVoiceGuideGemini(imageBuffer, transcript, model) {
   const apiKey = settings.getApiKey();
   if (!apiKey) throw new Error('No Gemini API key configured.');
 
-  const url = `${GEMINI_API_BASE}/models/${model}:generateContent?key=${apiKey}`;
+  const url = `${GEMINI_API_BASE}/models/${model}:generateContent`;
 
   const body = {
     system_instruction: { parts: [{ text: VOICE_GUIDE_SYSTEM_PROMPT }] },
@@ -333,7 +333,7 @@ async function fetchVoiceGuideGemini(imageBuffer, transcript, model) {
 
   const response = await fetch(url, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body:    JSON.stringify(body),
   });
 
