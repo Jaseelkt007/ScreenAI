@@ -42,6 +42,7 @@ const os = require('os');
 const path = require('path');
 
 const { registerHotkeys, reregisterHotkeys, unregisterHotkeys } = require('./hotkey');
+const jarvis = require('./jarvis/index');
 const { captureFullScreen, cropImage }                          = require('./screenshot');
 const { streamLLM, getVoiceGuide }                             = require('./llm');
 const { transcribeAudio }                                       = require('./stt');
@@ -236,6 +237,9 @@ app.whenReady().then(() => {
   if (settingsStore.isFirstRun() || !settingsStore.getApiKey()) {
     openSettingsWindow();
   }
+
+  // ── Jarvis pipeline (Phase 1) ─────────────────────────────────────────────
+  jarvis.init(backgroundWindow);
 
   console.log('[App] Screen AI Assistant running. F7 / Ctrl+Shift+Y to capture. F8 for voice guide.');
 });

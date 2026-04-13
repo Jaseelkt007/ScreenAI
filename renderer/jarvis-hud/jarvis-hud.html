@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:;">
+  <title>Jarvis</title>
+  <link rel="stylesheet" href="jarvis-hud.css">
+</head>
+<body>
+
+  <!-- ── Top row: icon + status label ── -->
+  <div id="top-row">
+    <div id="orb" class="orb-idle"></div>
+    <span id="status-label">Jarvis</span>
+    <button id="close-btn" title="Close">✕</button>
+  </div>
+
+  <!-- ── Transcript preview (shown once classifying) ── -->
+  <div id="transcript" class="hidden"></div>
+
+  <!-- ── M2 text input (hidden in M3 once voice is wired) ── -->
+  <div id="input-row">
+    <input id="cmd-input" type="text" placeholder="Type a command…" autocomplete="off" spellcheck="false">
+    <button id="send-btn">→</button>
+  </div>
+
+  <!-- ── Confirm bar (shown during confirmation requests) ── -->
+  <div id="confirm-bar" class="hidden">
+    <span id="confirm-msg"></span>
+    <div id="confirm-actions">
+      <button id="confirm-ok-btn" class="btn-confirm">Enter ↵</button>
+      <button id="confirm-cancel-btn" class="btn-cancel">Esc</button>
+    </div>
+  </div>
+
+  <!-- ── Result / error bar ── -->
+  <div id="result-bar" class="hidden">
+    <span id="result-text"></span>
+  </div>
+
+  <script src="jarvis-hud.js"></script>
+</body>
+</html>
