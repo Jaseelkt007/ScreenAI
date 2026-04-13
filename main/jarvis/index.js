@@ -3,14 +3,15 @@
 /**
  * index.js — Jarvis pipeline entry point.
  *
- * Responsibilities:
- *   - Register F9 / Shift+Command+J hotkey directly via globalShortcut
- *     (NOT through hotkey.js — that calls unregisterAll() on re-register)
- *   - Create and manage the Jarvis HUD BrowserWindow (create once, show/hide)
- *   - Wire IPC: jarvis:text, jarvis:audio, jarvis:confirm-reply, jarvis:ping
- *   - Provide hudSend() and waitForConfirm() to pipeline
+ * Hotkey behaviour (M3):
+ *   First F9  → show HUD + send jarvis:start-recording (begin voice capture)
+ *   Second F9 → send jarvis:stop-recording → HUD encodes audio → sends jarvis:audio
+ *   F9 while pipeline running → ignored
+ *   F9 while HUD idle/visible → hide HUD (toggle)
  *
- * Called once from main.js: jarvis.init(mainWindow)
+ * The Jarvis hotkey is registered via globalShortcut.register() directly —
+ * NOT through hotkey.js — because hotkey.js calls globalShortcut.unregisterAll()
+ * on every re-registration, which would wipe the Jarvis hotkey.
  */
 
 const {
@@ -27,24 +28,21 @@ const { runPipelineFromText, runPipelineFromAudio } = require('./pipeline');
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
-let _hudWindow   = null;
-let _mainWindow  = null;
-let _pipelineRunning = false;
+let _hudWindow       = null;
+let _hudReady        = false;   // true once did-finish-load fires
+let _pendingStart    = false;   // queued start-recording for cold-start
 
-// One-shot confirm resolve/reject — populated by waitForConfirm(), cleared on use
+let _pipelineRunning = false;
+let _isRecording     = false;   // M3: tracks whether HUD is currently recording
+
+// One-shot confirm resolve/reject
 let _confirmResolve = null;
 let _confirmReject  = null;
 let _confirmTimer   = null;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-/**
- * Initialize the Jarvis pipeline. Called once from main.js after app is ready.
- * @param {BrowserWindow} mainWindow — the app's primary window (for re-registration events)
- */
 function init(mainWindow) {
-  _mainWindow = mainWindow;
-
   if (!settings.getSetting('jarvisEnabled', true)) {
     console.log('[Jarvis] Disabled in settings — skipping init.');
     return;
@@ -54,7 +52,7 @@ function init(mainWindow) {
   registerHotkey();
   registerIpcHandlers();
 
-  console.log('[Jarvis] Initialized. Press F9 / Shift+Command+J to activate.');
+  console.log('[Jarvis] Initialized. F9 / Shift+Command+J → speak command.');
 }
 
 // ─── Hotkey ───────────────────────────────────────────────────────────────────
@@ -77,9 +75,8 @@ function registerHotkey() {
       if (ok) {
         console.log(`[Jarvis] Hotkey registered: ${shortcut}`);
         return;
-      } else {
-        console.warn(`[Jarvis] Could not register hotkey: ${shortcut}`);
       }
+      console.warn(`[Jarvis] Could not register hotkey: ${shortcut}`);
     } catch (err) {
       console.warn(`[Jarvis] Hotkey error (${shortcut}):`, err.message);
     }
@@ -87,47 +84,67 @@ function registerHotkey() {
 }
 
 function onHotkeyFired() {
+  // ── While pipeline is executing: ignore ──────────────────────────────────
+  if (_pipelineRunning) return;
+
+  // ── While recording: second press = stop recording ───────────────────────
+  if (_isRecording) {
+    _isRecording = false;
+    hudSend('jarvis:stop-recording', {});
+    return;
+  }
+
+  // ── HUD is visible and idle: hide (toggle off) ───────────────────────────
+  if (_hudWindow && !_hudWindow.isDestroyed() && _hudWindow.isVisible()) {
+    hideHud();
+    return;
+  }
+
+  // ── First press: show HUD + start recording ───────────────────────────────
+  _isRecording = true;
+
   if (!_hudWindow || _hudWindow.isDestroyed()) {
     createHudWindow();
   }
 
-  if (_hudWindow.isVisible()) {
-    // Toggle: hide if already open and pipeline is idle
-    if (!_pipelineRunning) {
-      _hudWindow.hide();
-    }
-    return;
-  }
-
   showHud();
+
+  if (_hudReady) {
+    hudSend('jarvis:start-recording', {});
+  } else {
+    // Window not yet loaded — send after did-finish-load
+    _pendingStart = true;
+  }
 }
 
 // ─── HUD window ───────────────────────────────────────────────────────────────
 
 function createHudWindow() {
+  _hudReady     = false;
+  _pendingStart = false;
+
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
   _hudWindow = new BrowserWindow({
-    width:  360,
-    height: 120,
-    x: width  - 360 - 20,
-    y: height - 120 - 20,
-    frame:          false,
-    transparent:    true,
-    alwaysOnTop:    true,
-    skipTaskbar:    true,
-    resizable:      false,
-    movable:        true,
-    show:           false,
+    width:       360,
+    height:      120,
+    x:           width  - 360 - 20,
+    y:           height - 120 - 20,
+    frame:       false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable:   false,
+    movable:     true,
+    show:        false,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration:  false,
-      sandbox:          false, // needed for preload IPC
+      sandbox:          false,
       preload:          path.join(__dirname, '../../preload/preload.js'),
     },
   });
 
-  // Prevent navigation / popups
   _hudWindow.webContents.on('will-navigate', (e, url) => {
     if (!url.startsWith('file://')) e.preventDefault();
   });
@@ -137,12 +154,24 @@ function createHudWindow() {
     path.join(__dirname, '../../renderer/jarvis-hud/jarvis-hud.html')
   );
 
-  _hudWindow.on('closed', () => {
-    _hudWindow = null;
+  _hudWindow.webContents.once('did-finish-load', () => {
+    _hudReady = true;
+    if (_pendingStart) {
+      _pendingStart = false;
+      hudSend('jarvis:start-recording', {});
+    }
   });
 
-  // Don't show in taskbar / dock
-  if (process.platform === 'darwin') _hudWindow.setVisibleOnAllWorkspaces(true);
+  _hudWindow.on('closed', () => {
+    _hudWindow    = null;
+    _hudReady     = false;
+    _isRecording  = false;
+    _pendingStart = false;
+  });
+
+  if (process.platform === 'darwin') {
+    _hudWindow.setVisibleOnAllWorkspaces(true);
+  }
 }
 
 function showHud() {
@@ -166,13 +195,9 @@ function hudSend(channel, payload) {
 
 function waitForConfirm() {
   return new Promise((resolve, reject) => {
-    // Clear any stale confirm state
     clearConfirmState();
-
     _confirmResolve = resolve;
     _confirmReject  = reject;
-
-    // 10-second timeout
     _confirmTimer = setTimeout(() => {
       clearConfirmState();
       reject(new Error('Confirmation timeout'));
@@ -190,37 +215,15 @@ function clearConfirmState() {
 
 function registerIpcHandlers() {
 
-  // ── jarvis:text — M2 typed command from HUD ──────────────────────────────
-  ipcMain.on('jarvis:text', async (_e, text) => {
-    if (_pipelineRunning) {
-      console.warn('[Jarvis] Pipeline already running — ignoring new command');
-      return;
-    }
-
-    if (!text || typeof text !== 'string' || !text.trim()) return;
-
-    console.log(`[Jarvis] Command received: "${text}"`);
-    _pipelineRunning = true;
-
-    try {
-      await runPipelineFromText(text.trim(), hudSend, waitForConfirm);
-    } finally {
-      _pipelineRunning = false;
-    }
-
-    // Auto-hide HUD shortly after done event is sent (renderer auto-dismisses first)
-    setTimeout(() => {
-      if (!_pipelineRunning) hideHud();
-    }, 4000);
-  });
-
-  // ── jarvis:audio — M3 voice audio from HUD ───────────────────────────────
+  // ── jarvis:audio — M3 voice audio (HUD sends after MediaRecorder stops) ──
   ipcMain.on('jarvis:audio', async (_e, { audioBase64, mimeType }) => {
+    // Recording is now complete regardless of who stopped it
+    _isRecording = false;
+
     if (_pipelineRunning) {
       console.warn('[Jarvis] Pipeline already running — ignoring audio');
       return;
     }
-
     if (!audioBase64) return;
 
     _pipelineRunning = true;
@@ -231,12 +234,30 @@ function registerIpcHandlers() {
       _pipelineRunning = false;
     }
 
-    setTimeout(() => {
-      if (!_pipelineRunning) hideHud();
-    }, 4000);
+    // Auto-hide after result auto-dismiss in renderer (3–5s); add small buffer
+    setTimeout(() => { if (!_pipelineRunning) hideHud(); }, 4500);
   });
 
-  // ── jarvis:confirm-reply — user confirmed or cancelled ───────────────────
+  // ── jarvis:text — M2/debug typed command ─────────────────────────────────
+  ipcMain.on('jarvis:text', async (_e, text) => {
+    if (_pipelineRunning) {
+      console.warn('[Jarvis] Pipeline already running — ignoring text command');
+      return;
+    }
+    if (!text || typeof text !== 'string' || !text.trim()) return;
+
+    console.log(`[Jarvis] Text command: "${text}"`);
+    _pipelineRunning = true;
+    try {
+      await runPipelineFromText(text.trim(), hudSend, waitForConfirm);
+    } finally {
+      _pipelineRunning = false;
+    }
+
+    setTimeout(() => { if (!_pipelineRunning) hideHud(); }, 4500);
+  });
+
+  // ── jarvis:confirm-reply ──────────────────────────────────────────────────
   ipcMain.on('jarvis:confirm-reply', (_e, confirmed) => {
     if (_confirmResolve) {
       const resolve = _confirmResolve;
@@ -245,22 +266,23 @@ function registerIpcHandlers() {
     }
   });
 
-  // ── jarvis:close — renderer requests close ────────────────────────────────
+  // ── jarvis:close ──────────────────────────────────────────────────────────
   ipcMain.on('jarvis:close', () => {
+    _isRecording = false;
     hideHud();
   });
 
-  // ── jarvis:ping — health check (used by settings UI) ─────────────────────
-  ipcMain.handle('jarvis:ping', () => {
-    return { ok: true, version: 1, running: _pipelineRunning };
-  });
+  // ── jarvis:ping ───────────────────────────────────────────────────────────
+  ipcMain.handle('jarvis:ping', () => ({
+    ok: true, version: 1, running: _pipelineRunning, recording: _isRecording,
+  }));
 }
 
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
 app.on('will-quit', () => {
-  globalShortcut.unregister('F9');
-  globalShortcut.unregister('Shift+Command+J');
+  try { globalShortcut.unregister('F9'); } catch {}
+  try { globalShortcut.unregister('Shift+Command+J'); } catch {}
 });
 
 module.exports = { init };

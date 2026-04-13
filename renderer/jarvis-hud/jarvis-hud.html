@@ -9,18 +9,27 @@
 </head>
 <body>
 
-  <!-- ── Top row: icon + status label ── -->
+  <!-- ── Top row: orb + status label + close ── -->
   <div id="top-row">
     <div id="orb" class="orb-idle"></div>
     <span id="status-label">Jarvis</span>
     <button id="close-btn" title="Close">✕</button>
   </div>
 
+  <!-- ── Listening row: mic icon + level meter + stop button (M3 voice) ── -->
+  <div id="listen-row" class="hidden">
+    <span id="mic-icon">🎙</span>
+    <div id="level-bar">
+      <div id="level-fill"></div>
+    </div>
+    <button id="stop-btn" title="Stop recording (or press F9)">■</button>
+  </div>
+
   <!-- ── Transcript preview (shown once classifying) ── -->
   <div id="transcript" class="hidden"></div>
 
-  <!-- ── M2 text input (hidden in M3 once voice is wired) ── -->
-  <div id="input-row">
+  <!-- ── Text input (debug fallback — hidden by default in M3) ── -->
+  <div id="input-row" class="hidden">
     <input id="cmd-input" type="text" placeholder="Type a command…" autocomplete="off" spellcheck="false">
     <button id="send-btn">→</button>
   </div>

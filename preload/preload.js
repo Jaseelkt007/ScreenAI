@@ -207,4 +207,18 @@ contextBridge.exposeInMainWorld('jarvis', {
   /** Health check — resolves with { ok, version, running }. */
   ping: () =>
     ipcRenderer.invoke('jarvis:ping'),
+
+  /** main → renderer: begin MediaRecorder. Returns unsubscribe fn. */
+  onStartRecording: (fn) => {
+    const h = () => fn();
+    ipcRenderer.on('jarvis:start-recording', h);
+    return () => ipcRenderer.removeListener('jarvis:start-recording', h);
+  },
+
+  /** main → renderer: stop MediaRecorder and send audio. Returns unsubscribe fn. */
+  onStopRecording: (fn) => {
+    const h = () => fn();
+    ipcRenderer.on('jarvis:stop-recording', h);
+    return () => ipcRenderer.removeListener('jarvis:stop-recording', h);
+  },
 });
