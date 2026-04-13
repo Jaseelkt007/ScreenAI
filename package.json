@@ -17,8 +17,8 @@
   },
   "dependencies": {
     "form-data": "^4.0.5",
-    "jimp": "0.22.12",
-    "node-fetch": "2.7.0",
+    "jimp": "1.6.1",
+    "node-fetch": "3.3.2",
     "screenshot-desktop": "^1.15.3"
   },
   "devDependencies": {
