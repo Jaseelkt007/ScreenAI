@@ -65,6 +65,10 @@ function getDefaults() {
     agentEnabled:        false,
     agentBackend:        'codex', // 'codex' | 'vibe'
     mistralApiKey:       '',
+    // Jarvis pipeline
+    jarvisEnabled:       true,
+    jarvisHotkey:        '',     // custom override; default is F9 / Shift+Command+J
+    jarvisLlmFallback:   true,   // false = pattern-only mode, no API call on miss
   };
 }
 
@@ -127,8 +131,19 @@ function getMistralKey() {
   return getSetting('mistralApiKey', '') || process.env.MISTRAL_API_KEY || '';
 }
 
+/** True if the Jarvis pipeline is enabled. */
+function isJarvisEnabled() {
+  return getSetting('jarvisEnabled', true) === true;
+}
+
+/** True if the classifier may call the LLM when no pattern fires. */
+function isJarvisLlmFallbackEnabled() {
+  return getSetting('jarvisLlmFallback', true) === true;
+}
+
 module.exports = {
   loadSettings, saveSettings, getSetting,
   isFirstRun, getApiKey, getOpenAIKey, getModel, getElevenLabsKey,
   isAgentEnabled, getAgentBackend, getMistralKey,
+  isJarvisEnabled, isJarvisLlmFallbackEnabled,
 };

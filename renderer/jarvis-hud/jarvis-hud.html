@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:;">
+  <title>Jarvis</title>
+  <link rel="stylesheet" href="jarvis-hud.css">
+</head>
+<body>
+
+  <!-- ── Top row: orb + status label + close ── -->
+  <div id="top-row">
+    <div id="orb" class="orb-idle"></div>
+    <span id="status-label">Jarvis</span>
+    <button id="close-btn" title="Close">✕</button>
+  </div>
+
+  <!-- ── Listening row: mic icon + level meter + stop button (M3 voice) ── -->
+  <div id="listen-row" class="hidden">
+    <span id="mic-icon">🎙</span>
+    <div id="level-bar">
+      <div id="level-fill"></div>
+    </div>
+    <button id="stop-btn" title="Stop recording (or press F9)">■</button>
+  </div>
+
+  <!-- ── Transcript preview (shown once classifying) ── -->
+  <div id="transcript" class="hidden"></div>
+
+  <!-- ── Text input (debug fallback — hidden by default in M3) ── -->
+  <div id="input-row" class="hidden">
+    <input id="cmd-input" type="text" placeholder="Type a command…" autocomplete="off" spellcheck="false">
+    <button id="send-btn">→</button>
+  </div>
+
+  <!-- ── Confirm bar (shown during confirmation requests) ── -->
+  <div id="confirm-bar" class="hidden">
+    <span id="confirm-msg"></span>
+    <div id="confirm-actions">
+      <button id="confirm-ok-btn" class="btn-confirm">Enter ↵</button>
+      <button id="confirm-cancel-btn" class="btn-cancel">Esc</button>
+    </div>
+  </div>
+
+  <!-- ── Result / error bar ── -->
+  <div id="result-bar" class="hidden">
+    <span id="result-text"></span>
+  </div>
+
+  <script src="jarvis-hud.js"></script>
+</body>
+</html>

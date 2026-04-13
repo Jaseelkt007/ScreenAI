@@ -1,0 +1,281 @@
+/* jarvis-hud.css — Jarvis floating HUD */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --orb-idle:       #4a4a5a;
+  --orb-listening:  #e05090;
+  --orb-active:     #7c6cf8;
+  --orb-executing:  #f5a623;
+  --orb-done:       #4caf50;
+  --orb-error:      #e05050;
+
+  --bg:             rgba(18, 18, 26, 0.95);
+  --text:           #e8e8f0;
+  --text-dim:       #8888aa;
+  --accent:         #7c6cf8;
+  --border:         rgba(255, 255, 255, 0.08);
+  --input-bg:       rgba(255, 255, 255, 0.06);
+  --confirm-ok:     #4caf50;
+  --confirm-cancel: #555;
+  --level-bg:       rgba(255, 255, 255, 0.08);
+  --level-fill:     #e05090;
+
+  --radius:         10px;
+  --font:           -apple-system, 'Segoe UI', system-ui, sans-serif;
+}
+
+html, body {
+  width:  360px;
+  height: 120px;
+  overflow: hidden;
+  background: transparent;
+  -webkit-app-region: drag;
+}
+
+body {
+  font-family: var(--font);
+  font-size:   13px;
+  color:       var(--text);
+  background:  var(--bg);
+  border:      1px solid var(--border);
+  border-radius: var(--radius);
+  display:     flex;
+  flex-direction: column;
+  gap:         6px;
+  padding:     10px 12px 8px;
+  user-select: none;
+}
+
+/* ── Top row ─────────────────────────────────────────────────────────────── */
+
+#top-row {
+  display:     flex;
+  align-items: center;
+  gap:         8px;
+  -webkit-app-region: drag;
+}
+
+/* Animated orb */
+#orb {
+  width:  10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background-color 0.25s;
+}
+
+.orb-idle      { background: var(--orb-idle); }
+.orb-listening { background: var(--orb-listening); animation: pulse-listen 1s infinite; }
+.orb-active    { background: var(--orb-active);    animation: pulse 1.4s infinite; }
+.orb-executing { background: var(--orb-executing); animation: pulse 0.8s infinite; }
+.orb-done      { background: var(--orb-done); }
+.orb-error     { background: var(--orb-error); }
+
+@keyframes pulse-listen {
+  0%, 100% { opacity: 1;   transform: scale(1);    box-shadow: 0 0 0 0 rgba(224,80,144,0.5); }
+  50%       { opacity: 0.8; transform: scale(1.3);  box-shadow: 0 0 0 4px rgba(224,80,144,0); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1;   transform: scale(1);    }
+  50%       { opacity: 0.5; transform: scale(1.25); }
+}
+
+#status-label {
+  font-size:   12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color:       var(--text);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#close-btn {
+  -webkit-app-region: no-drag;
+  background: none;
+  border: none;
+  color:  var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: color 0.2s, background 0.2s;
+  line-height: 1;
+}
+#close-btn:hover { color: var(--text); background: rgba(255,255,255,0.08); }
+
+/* ── Listen row (M3 voice recording) ────────────────────────────────────── */
+
+#listen-row {
+  -webkit-app-region: no-drag;
+  display:     flex;
+  align-items: center;
+  gap:         8px;
+}
+
+#mic-icon {
+  font-size:   16px;
+  flex-shrink: 0;
+  line-height: 1;
+  animation:   mic-breathe 1.5s ease-in-out infinite;
+}
+
+@keyframes mic-breathe {
+  0%, 100% { opacity: 1;   }
+  50%       { opacity: 0.5; }
+}
+
+#level-bar {
+  flex:         1;
+  height:       6px;
+  background:   var(--level-bg);
+  border-radius: 3px;
+  overflow:     hidden;
+}
+
+#level-fill {
+  height:       100%;
+  width:        0%;
+  background:   var(--level-fill);
+  border-radius: 3px;
+  transition:   width 60ms linear;
+}
+
+#stop-btn {
+  -webkit-app-region: no-drag;
+  background: rgba(224, 80, 80, 0.2);
+  border:     1px solid rgba(224, 80, 80, 0.35);
+  border-radius: 5px;
+  color:      #ef9a9a;
+  cursor:     pointer;
+  font-size:  12px;
+  padding:    3px 8px;
+  flex-shrink: 0;
+  transition: background 0.2s, color 0.2s;
+}
+#stop-btn:hover { background: rgba(224,80,80,0.35); color: #fff; }
+
+/* ── Transcript preview ──────────────────────────────────────────────────── */
+
+#transcript {
+  font-size:  11px;
+  color:      var(--text-dim);
+  overflow:   hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 18px;
+}
+
+/* ── Text input row (debug fallback) ─────────────────────────────────────── */
+
+#input-row {
+  -webkit-app-region: no-drag;
+  display:    flex;
+  gap:        6px;
+  align-items: center;
+}
+
+#cmd-input {
+  flex:       1;
+  background: var(--input-bg);
+  border:     1px solid var(--border);
+  border-radius: 6px;
+  color:      var(--text);
+  font-family: var(--font);
+  font-size:  12px;
+  padding:    4px 8px;
+  outline:    none;
+  transition: border-color 0.2s;
+}
+#cmd-input:focus { border-color: var(--accent); }
+#cmd-input::placeholder { color: var(--text-dim); }
+
+#send-btn {
+  -webkit-app-region: no-drag;
+  background: var(--accent);
+  border:     none;
+  border-radius: 6px;
+  color:      #fff;
+  cursor:     pointer;
+  font-size:  13px;
+  padding:    4px 9px;
+  transition: opacity 0.2s;
+}
+#send-btn:hover  { opacity: 0.85; }
+#send-btn:active { opacity: 0.7; }
+
+/* ── Confirm bar ─────────────────────────────────────────────────────────── */
+
+#confirm-bar {
+  -webkit-app-region: no-drag;
+  display:     flex;
+  align-items: center;
+  gap:         8px;
+  background:  rgba(245, 166, 35, 0.12);
+  border:      1px solid rgba(245, 166, 35, 0.25);
+  border-radius: 6px;
+  padding:     5px 8px;
+}
+
+#confirm-msg {
+  flex:      1;
+  font-size: 11px;
+  color:     var(--text);
+  overflow:  hidden;
+  text-overflow: ellipsis;
+  white-space:   nowrap;
+}
+
+#confirm-actions {
+  display:     flex;
+  gap:         4px;
+  flex-shrink: 0;
+}
+
+.btn-confirm, .btn-cancel {
+  border:        none;
+  border-radius: 4px;
+  cursor:        pointer;
+  font-size:     11px;
+  padding:       3px 8px;
+  transition:    opacity 0.2s;
+}
+.btn-confirm { background: var(--confirm-ok);     color: #fff; }
+.btn-cancel  { background: var(--confirm-cancel); color: var(--text); }
+.btn-confirm:hover, .btn-cancel:hover { opacity: 0.8; }
+
+/* ── Result bar ──────────────────────────────────────────────────────────── */
+
+#result-bar {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+  padding:     4px 8px;
+  border-radius: 6px;
+  font-size:   12px;
+}
+
+#result-bar.result-ok {
+  background: rgba(76, 175, 80, 0.12);
+  border:     1px solid rgba(76, 175, 80, 0.25);
+  color:      #a5d6a7;
+}
+
+#result-bar.result-error {
+  background: rgba(224, 80, 80, 0.12);
+  border:     1px solid rgba(224, 80, 80, 0.25);
+  color:      #ef9a9a;
+}
+
+#result-text {
+  overflow:      hidden;
+  text-overflow: ellipsis;
+  white-space:   nowrap;
+}
+
+/* ── Utility ─────────────────────────────────────────────────────────────── */
+
+.hidden { display: none !important; }

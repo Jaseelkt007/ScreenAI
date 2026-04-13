@@ -160,3 +160,65 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentInstall: (backend) =>
     ipcRenderer.invoke('agent:install', backend),
 });
+
+// ── Jarvis HUD ────────────────────────────────────────────────────────────────
+// Separate contextBridge entry — does not touch electronAPI above.
+
+contextBridge.exposeInMainWorld('jarvis', {
+
+  /** Send a typed command text to main (M2 mode). */
+  sendText: (text) =>
+    ipcRenderer.send('jarvis:text', text),
+
+  /** Send recorded audio bytes to main (M3 mode). */
+  sendAudio: (data) =>
+    ipcRenderer.send('jarvis:audio', data),
+
+  /** Close the HUD window. */
+  closeHud: () =>
+    ipcRenderer.send('jarvis:close'),
+
+  /**
+   * Each onX listener returns an unsubscribe function.
+   * MUST be called when the HUD resets to idle to prevent listener accumulation.
+   */
+  onStatus: (fn) => {
+    const h = (_, p) => fn(p);
+    ipcRenderer.on('jarvis:status', h);
+    return () => ipcRenderer.removeListener('jarvis:status', h);
+  },
+
+  onConfirm: (fn) => {
+    const h = (_, p) => fn(p);
+    ipcRenderer.on('jarvis:confirm', h);
+    return () => ipcRenderer.removeListener('jarvis:confirm', h);
+  },
+
+  onDone: (fn) => {
+    const h = (_, p) => fn(p);
+    ipcRenderer.on('jarvis:done', h);
+    return () => ipcRenderer.removeListener('jarvis:done', h);
+  },
+
+  /** Send confirm (true) or cancel (false) reply to main. */
+  replyConfirm: (ok) =>
+    ipcRenderer.send('jarvis:confirm-reply', ok),
+
+  /** Health check — resolves with { ok, version, running }. */
+  ping: () =>
+    ipcRenderer.invoke('jarvis:ping'),
+
+  /** main → renderer: begin MediaRecorder. Returns unsubscribe fn. */
+  onStartRecording: (fn) => {
+    const h = () => fn();
+    ipcRenderer.on('jarvis:start-recording', h);
+    return () => ipcRenderer.removeListener('jarvis:start-recording', h);
+  },
+
+  /** main → renderer: stop MediaRecorder and send audio. Returns unsubscribe fn. */
+  onStopRecording: (fn) => {
+    const h = () => fn();
+    ipcRenderer.on('jarvis:stop-recording', h);
+    return () => ipcRenderer.removeListener('jarvis:stop-recording', h);
+  },
+});
