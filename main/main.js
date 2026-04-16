@@ -101,6 +101,9 @@ let _activeAgentScratchDirEphemeral = true;
 let fullScreenBuffer = null;
 let croppedBuffer    = null;
 
+// Stored full bounds for compact → expanded window transition
+let _overlayExpandBounds = null;
+
 // ─── Voice session state machine ──────────────────────────────────────────
 // States: idle | starting | recording | transcribing | capturing | analyzing | showing_result | speaking | error
 let voiceState = 'idle';
@@ -531,17 +534,29 @@ function openOverlayWindow(logicalRegion) {
   const W = Math.min(maxW, Math.max(820, Math.round(workAreaSize.width * 0.58)));
   const H = Math.min(maxH, Math.max(560, Math.round(workAreaSize.height * 0.72)));
 
-  let x = logicalRegion.x + logicalRegion.width + GAP;
-  let y = logicalRegion.y;
-  if (x + W > workAreaSize.width)  x = logicalRegion.x - W - GAP;
-  if (x < 0)                       x = GAP;
-  if (y + H > workAreaSize.height) y = workAreaSize.height - H - GAP;
-  if (y < 0)                       y = GAP;
+  let fullX = logicalRegion.x + logicalRegion.width + GAP;
+  let fullY = logicalRegion.y;
+  if (fullX + W > workAreaSize.width)  fullX = logicalRegion.x - W - GAP;
+  if (fullX < 0)                       fullX = GAP;
+  if (fullY + H > workAreaSize.height) fullY = workAreaSize.height - H - GAP;
+  if (fullY < 0)                       fullY = GAP;
+
+  // Store the full expanded bounds for when user submits the compact input
+  _overlayExpandBounds = { x: fullX, y: fullY, width: W, height: H };
+
+  // Start as a compact pill (560×90) centred horizontally
+  const PILL_W = 560;
+  const PILL_H = 90;
+  const x = Math.max(GAP, Math.round((workAreaSize.width  - PILL_W) / 2));
+  const y = Math.max(GAP, Math.min(
+    workAreaSize.height - PILL_H - GAP,
+    Math.round(workAreaSize.height * 0.68)
+  ));
 
   overlayWindow = new BrowserWindow({
-    x, y, width: W, height: H,
+    x, y, width: PILL_W, height: PILL_H,
     transparent: true, frame: false, alwaysOnTop: true,
-    skipTaskbar: true, resizable: true, hasShadow: false,
+    skipTaskbar: true, resizable: false, hasShadow: false,
     icon: APP_ICON,
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
@@ -588,6 +603,13 @@ ipcMain.on('overlay:ask', async (event, { prompt, history }) => {
 });
 
 ipcMain.on('overlay:close', closeAll);
+
+ipcMain.on('overlay:expand', () => {
+  if (!overlayWindow || overlayWindow.isDestroyed() || !_overlayExpandBounds) return;
+  const { x, y, width, height } = _overlayExpandBounds;
+  overlayWindow.setResizable(true);
+  overlayWindow.setBounds({ x, y, width, height }, true);
+});
 
 // ─── Voice Guide flow ─────────────────────────────────────────────────────
 

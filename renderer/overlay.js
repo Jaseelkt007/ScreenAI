@@ -25,6 +25,10 @@ const turnsUsedEl       = document.getElementById('turns-used');
 const turnsMaxEl        = document.getElementById('turns-max');
 const sendBtnLabel      = sendBtn.querySelector('.btn-text');
 
+// ── Compact pill elements ─────────────────────────────────────────────────
+const compactInput = document.getElementById('compact-input');
+const compactSend  = document.getElementById('compact-send');
+
 const MAX_TURNS = 3;
 
 let conversation       = [];
@@ -74,7 +78,11 @@ setOverlayState('idle');
 
 window.electronAPI.onOverlayInit(({ imageDataUrl }) => {
   screenshotImg.src = imageDataUrl;
-  questionInput.focus();
+  if (hudEl.dataset.mode === 'compact') {
+    compactInput.focus();
+  } else {
+    questionInput.focus();
+  }
   setOverlayState('idle');
 });
 
@@ -162,6 +170,38 @@ questionInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault();
     submitQuestion();
+  }
+});
+
+// ── Compact pill submit ───────────────────────────────────────────────────
+
+function submitCompact() {
+  const text = compactInput.value.trim();
+  if (!text) return;
+
+  // Disable compact input while transitioning
+  compactInput.disabled = true;
+  compactSend.disabled  = true;
+
+  // Transfer text to the main textarea used by submitQuestion()
+  questionInput.value = text;
+
+  // Ask main process to resize the window to the full overlay size
+  window.electronAPI.sendExpand();
+
+  // Switch the HUD to expanded mode (shows full UI, hides pill)
+  hudEl.dataset.mode = 'expanded';
+
+  // Run the existing question submit which handles LLM + UI updates
+  submitQuestion();
+}
+
+compactSend.addEventListener('click', submitCompact);
+
+compactInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    submitCompact();
   }
 });
 
