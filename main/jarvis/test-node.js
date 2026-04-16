@@ -483,26 +483,535 @@ async function runVerifierTests() {
   cleanup();
 }
 
+// ─── 6. Phase 2 M2.1 — classifier + verifier (window/app control) ────────────
+
+async function runM21Tests() {
+  section('6. M2.1 — Classifier patterns: app.close / app.focus / window.*');
+
+  // ── app.close patterns ──
+  const closeCases = [
+    { t: 'close notepad',           intent: 'app.close', appName: 'notepad' },
+    { t: 'quit chrome',             intent: 'app.close', appName: 'chrome' },
+    { t: 'exit spotify',            intent: 'app.close', appName: 'spotify' },
+    { t: 'terminate edge',          intent: 'app.close', appName: 'edge' },
+    { t: 'shut down vscode',        intent: 'app.close', appName: 'vscode' },
+    { t: 'close the word document', intent: 'app.close', appName: 'word' },
+  ];
+
+  for (const { t, intent, appName } of closeCases) {
+    await test(`"${t}" → ${intent}, appName: ${appName}`, async () => {
+      const r = await classify(t, LLM_NEVER_CALLED);
+      assert.equal(r.intent, intent, `Got "${r.intent}"`);
+      assert.equal(r.confidence, 'pattern');
+      assert.equal(r.params.appName, appName, `appName: got "${r.params.appName}"`);
+    });
+  }
+
+  // ── app.focus patterns ──
+  const focusCases = [
+    { t: 'focus notepad',      intent: 'app.focus', appName: 'notepad' },
+    { t: 'switch to chrome',   intent: 'app.focus', appName: 'chrome' },
+    { t: 'bring up edge',      intent: 'app.focus', appName: 'edge' },
+    { t: 'show firefox',       intent: 'app.focus', appName: 'firefox' },
+    { t: 'go to explorer',     intent: 'app.focus', appName: 'explorer' },
+    { t: 'foreground vscode',  intent: 'app.focus', appName: 'vscode' },
+  ];
+
+  for (const { t, intent, appName } of focusCases) {
+    await test(`"${t}" → ${intent}, appName: ${appName}`, async () => {
+      const r = await classify(t, LLM_NEVER_CALLED);
+      assert.equal(r.intent, intent, `Got "${r.intent}"`);
+      assert.equal(r.confidence, 'pattern');
+      assert.equal(r.params.appName, appName, `appName: got "${r.params.appName}"`);
+    });
+  }
+
+  // ── window.minimize patterns ──
+  await test('"minimize" → window.minimize, appName: null', async () => {
+    const r = await classify('minimize', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'window.minimize');
+    assert.equal(r.params.appName, null);
+  });
+
+  await test('"minimize window" → window.minimize, appName: null', async () => {
+    const r = await classify('minimize window', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'window.minimize');
+    assert.equal(r.params.appName, null);
+  });
+
+  await test('"minimize chrome" → window.minimize, appName: chrome', async () => {
+    const r = await classify('minimize chrome', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'window.minimize');
+    assert.equal(r.params.appName, 'chrome');
+  });
+
+  await test('"minimise edge" → window.minimize (British spelling)', async () => {
+    const r = await classify('minimise edge', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'window.minimize');
+    assert.equal(r.params.appName, 'edge');
+  });
+
+  // ── window.maximize patterns ──
+  await test('"maximize" → window.maximize, appName: null', async () => {
+    const r = await classify('maximize', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'window.maximize');
+    assert.equal(r.params.appName, null);
+  });
+
+  await test('"maximize edge" → window.maximize, appName: edge', async () => {
+    const r = await classify('maximize edge', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'window.maximize');
+    assert.equal(r.params.appName, 'edge');
+  });
+
+  await test('"full screen" → window.maximize', async () => {
+    const r = await classify('full screen', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'window.maximize');
+  });
+
+  await test('"fullscreen" → window.maximize', async () => {
+    const r = await classify('fullscreen', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'window.maximize');
+  });
+
+  // ── window.switch patterns ──
+  await test('"switch window" → window.switch', async () => {
+    const r = await classify('switch window', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'window.switch');
+  });
+
+  await test('"alt tab" → window.switch', async () => {
+    const r = await classify('alt tab', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'window.switch');
+  });
+
+  await test('"go to last window" → window.switch', async () => {
+    const r = await classify('go to last window', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'window.switch');
+  });
+
+  await test('"next window" → window.switch', async () => {
+    const r = await classify('next window', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'window.switch');
+  });
+
+  // ── Collision tests — existing Phase 1 patterns must NOT be affected ──
+  await test('"open notepad" → app.open (NOT app.close or app.focus)', async () => {
+    const r = await classify('open notepad', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'app.open', `Got "${r.intent}"`);
+  });
+
+  await test('"launch chrome" → app.open', async () => {
+    const r = await classify('launch chrome', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'app.open');
+  });
+
+  await test('"write hello to notes.txt" → file.write (NOT app.close/focus)', async () => {
+    const r = await classify('write hello to notes.txt', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.write', `Got "${r.intent}"`);
+  });
+
+  await test('"go to github.com" → browser.goto (NOT window.switch or app.focus)', async () => {
+    const r = await classify('go to github.com', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.goto', `Got "${r.intent}"`);
+  });
+
+  await test('"search for best coffee shops" → browser.search (no collision)', async () => {
+    const r = await classify('search for best coffee shops', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.search');
+  });
+
+  // ── window.switch params are always empty ──
+  await test('window.switch has no params', async () => {
+    const r = await classify('switch window', LLM_NEVER_CALLED);
+    assert.deepEqual(r.params, {});
+  });
+
+  // ── needsConfirm is false for all M2.1 intents ──
+  await test('app.close needsConfirm: false', async () => {
+    const r = await classify('close notepad', LLM_NEVER_CALLED);
+    assert.equal(r.needsConfirm, false);
+  });
+
+  await test('window.maximize needsConfirm: false', async () => {
+    const r = await classify('maximize chrome', LLM_NEVER_CALLED);
+    assert.equal(r.needsConfirm, false);
+  });
+
+  // ── Verifier: process_gone ──
+  section('6b. M2.1 — Verifier: process_gone and focus_assumed');
+
+  await test('app.close with closed:true → process_gone verified', async () => {
+    const cr = { intent: 'app.close' };
+    const tr = { ok: true, data: { closed: true, processName: 'notepad' } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'process_gone');
+    assert.ok(r.verified);
+  });
+
+  await test('app.close with closed:false → process_gone not verified', async () => {
+    const cr = { intent: 'app.close' };
+    const tr = { ok: true, data: { closed: false, processName: 'notepad' } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'process_gone');
+    assert.ok(!r.verified);
+  });
+
+  await test('app.close tool failure → skipped', async () => {
+    const cr = { intent: 'app.close' };
+    const tr = { ok: false, error: 'notepad is not running' };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'skipped');
+    assert.ok(!r.verified);
+  });
+
+  await test('app.focus → focus_assumed, verified: true', async () => {
+    const cr = { intent: 'app.focus' };
+    const tr = { ok: true, data: { focused: true, processName: 'chrome' } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'focus_assumed');
+    assert.ok(r.verified);
+  });
+
+  await test('window.minimize → spawn_ok', async () => {
+    const cr = { intent: 'window.minimize' };
+    const tr = { ok: true, data: {} };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'spawn_ok');
+    assert.ok(r.verified);
+  });
+
+  await test('window.maximize → spawn_ok', async () => {
+    const cr = { intent: 'window.maximize' };
+    const tr = { ok: true, data: {} };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'spawn_ok');
+    assert.ok(r.verified);
+  });
+
+  await test('window.switch → spawn_ok', async () => {
+    const cr = { intent: 'window.switch' };
+    const tr = { ok: true, data: {} };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'spawn_ok');
+    assert.ok(r.verified);
+  });
+}
+
+// ─── 7. Phase 2 M2.2 — classifier: input.type / input.key / input.shortcut ───
+
+async function runM22ClassifierTests() {
+  section('7. M2.2 — Classifier: input.type / input.key / input.shortcut');
+
+  // ── input.shortcut: named aliases ──
+  const namedAliasCases = [
+    { t: 'undo',                intent: 'input.shortcut', combo: 'ctrl+z' },
+    { t: 'redo',                intent: 'input.shortcut', combo: 'ctrl+y' },
+    { t: 'copy',                intent: 'input.shortcut', combo: 'ctrl+c' },
+    { t: 'paste',               intent: 'input.shortcut', combo: 'ctrl+v' },
+    { t: 'cut',                 intent: 'input.shortcut', combo: 'ctrl+x' },
+    { t: 'select all',          intent: 'input.shortcut', combo: 'ctrl+a' },
+    { t: 'save',                intent: 'input.shortcut', combo: 'ctrl+s' },
+    { t: 'save as',             intent: 'input.shortcut', combo: 'ctrl+shift+s' },
+    { t: 'please undo that',    intent: 'input.shortcut', combo: 'ctrl+z' },
+    { t: 'can you save',        intent: 'input.shortcut', combo: 'ctrl+s' },
+  ];
+
+  for (const { t, intent, combo } of namedAliasCases) {
+    await test(`"${t}" → ${intent}, combo: ${combo}`, async () => {
+      const r = await classify(t, LLM_NEVER_CALLED);
+      assert.equal(r.intent, intent, `Got "${r.intent}"`);
+      assert.equal(r.confidence, 'pattern');
+      assert.equal(r.params.combo, combo, `combo: got "${r.params.combo}"`);
+    });
+  }
+
+  // ── input.shortcut: modifier combos ──
+  const modifierCases = [
+    { t: 'press control c',       combo: 'ctrl+c' },
+    { t: 'press ctrl v',          combo: 'ctrl+v' },
+    { t: 'hit control z',         combo: 'ctrl+z' },
+    { t: 'press control shift s', combo: 'ctrl+shift+s' },
+    { t: 'press alt left',        combo: 'alt+left' },
+    { t: 'use ctrl t',            combo: 'ctrl+t' },
+    { t: 'press control w',       combo: 'ctrl+w' },
+    { t: 'press ctrl r',          combo: 'ctrl+r' },
+  ];
+
+  for (const { t, combo } of modifierCases) {
+    await test(`"${t}" → input.shortcut, combo: ${combo}`, async () => {
+      const r = await classify(t, LLM_NEVER_CALLED);
+      assert.equal(r.intent, 'input.shortcut', `Got "${r.intent}"`);
+      assert.equal(r.params.combo, combo, `combo: got "${r.params.combo}"`);
+    });
+  }
+
+  // ── input.key ──
+  const keyCases = [
+    { t: 'press enter',     key: 'enter' },
+    { t: 'press escape',    key: 'escape' },
+    { t: 'press esc',       key: 'esc' },
+    { t: 'press delete',    key: 'delete' },
+    { t: 'press backspace', key: 'backspace' },
+    { t: 'press tab',       key: 'tab' },
+    { t: 'press up',        key: 'up' },
+    { t: 'press down',      key: 'down' },
+    { t: 'press left',      key: 'left' },
+    { t: 'press right',     key: 'right' },
+    { t: 'press home',      key: 'home' },
+    { t: 'press end',       key: 'end' },
+    { t: 'press page up',   key: 'page up' },
+    { t: 'press page down', key: 'page down' },
+  ];
+
+  for (const { t, key } of keyCases) {
+    await test(`"${t}" → input.key, key: ${key}`, async () => {
+      const r = await classify(t, LLM_NEVER_CALLED);
+      assert.equal(r.intent, 'input.key', `Got "${r.intent}"`);
+      assert.equal(r.params.key, key, `key: got "${r.params.key}"`);
+    });
+  }
+
+  // ── input.type ──
+  const typeCases = [
+    { t: 'type hello world',         text: 'hello world' },
+    { t: 'type: hello world',        text: 'hello world' },
+    { t: 'type this hello',          text: 'hello' },
+    { t: 'type this: hello world',   text: 'hello world' },
+    { t: 'input hello',              text: 'hello' },
+    { t: 'input: some text here',    text: 'some text here' },
+  ];
+
+  for (const { t, text } of typeCases) {
+    await test(`"${t}" → input.type, text: "${text}"`, async () => {
+      const r = await classify(t, LLM_NEVER_CALLED);
+      assert.equal(r.intent, 'input.type', `Got "${r.intent}"`);
+      assert.equal(r.params.text, text, `text: got "${r.params.text}"`);
+    });
+  }
+
+  // ── Collision tests ──
+  await test('"write hello to notes.txt" → file.write (NOT input.type)', async () => {
+    const r = await classify('write hello to notes.txt', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.write', `Got "${r.intent}"`);
+  });
+
+  await test('"copy to clipboard: hello" → clipboard.write (NOT input.shortcut)', async () => {
+    const r = await classify('copy to clipboard: hello world', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'clipboard.write', `Got "${r.intent}"`);
+  });
+
+  await test('"press enter" → input.key (NOT input.shortcut)', async () => {
+    const r = await classify('press enter', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'input.key', `Got "${r.intent}"`);
+  });
+
+  await test('"press control c" → input.shortcut (NOT input.key)', async () => {
+    const r = await classify('press control c', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'input.shortcut');
+  });
+
+  await test('"open chrome" → app.open (NOT input.shortcut)', async () => {
+    const r = await classify('open chrome', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'app.open');
+  });
+
+  // ── needsConfirm: length-based for input.type ──
+  await test('input.type short text (<80 chars) → needsConfirm: false', async () => {
+    const r = await classify('type hello world', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'input.type');
+    assert.equal(r.needsConfirm, false, `needsConfirm should be false for short text`);
+  });
+
+  await test('input.type long text (>=80 chars) → needsConfirm: true', async () => {
+    const longText = 'a'.repeat(80);
+    const r = await classify(`type: ${longText}`, LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'input.type');
+    assert.equal(r.needsConfirm, true, `needsConfirm should be true for text >= 80 chars`);
+  });
+
+  await test('input.key needsConfirm: false', async () => {
+    const r = await classify('press enter', LLM_NEVER_CALLED);
+    assert.equal(r.needsConfirm, false);
+  });
+
+  await test('input.shortcut needsConfirm: false', async () => {
+    const r = await classify('undo', LLM_NEVER_CALLED);
+    assert.equal(r.needsConfirm, false);
+  });
+}
+
+// ─── 8. Phase 2 M2.2 — dispatcher routing (Tier A: param validation only) ───
+
+async function runM22DispatcherTests() {
+  section('8. M2.2 — Dispatcher routing: input.* param validation');
+
+  // These tests verify dispatch ROUTING by checking DispatchError for missing params.
+  // The keyboard.js PS calls are not tested here (Tier B — requires Windows runtime).
+
+  await test('input.type missing text → DispatchError', async () => {
+    const cr = { intent: 'input.type', params: {}, needsConfirm: false };
+    try {
+      await dispatch(cr);
+      assert.fail('should have thrown DispatchError');
+    } catch (err) {
+      assert.equal(err.name, 'DispatchError', `Expected DispatchError, got: ${err.name}`);
+      assert.ok(err.message.includes('text to type'), `message: ${err.message}`);
+    }
+  });
+
+  await test('input.key missing key → DispatchError', async () => {
+    const cr = { intent: 'input.key', params: {}, needsConfirm: false };
+    try {
+      await dispatch(cr);
+      assert.fail('should have thrown DispatchError');
+    } catch (err) {
+      assert.equal(err.name, 'DispatchError');
+      assert.ok(err.message.includes('key name'), `message: ${err.message}`);
+    }
+  });
+
+  await test('input.shortcut missing combo → DispatchError', async () => {
+    const cr = { intent: 'input.shortcut', params: {}, needsConfirm: false };
+    try {
+      await dispatch(cr);
+      assert.fail('should have thrown DispatchError');
+    } catch (err) {
+      assert.equal(err.name, 'DispatchError');
+      assert.ok(err.message.includes('shortcut combo'), `message: ${err.message}`);
+    }
+  });
+
+  // ── keyboard.js pure-logic tests (no PowerShell) ──
+  const { typeText, pressKey, pressShortcut, comboToWScript, NAMED_SHORTCUTS, KEY_MAP } = require('./tools/keyboard');
+
+  await test('comboToWScript("ctrl+c") → "^c"', () => {
+    assert.equal(comboToWScript('ctrl+c'), '^c');
+  });
+
+  await test('comboToWScript("ctrl+shift+s") → "^+s"', () => {
+    assert.equal(comboToWScript('ctrl+shift+s'), '^+s');
+  });
+
+  await test('comboToWScript("alt+left") → "%{LEFT}"', () => {
+    assert.equal(comboToWScript('alt+left'), '%{LEFT}');
+  });
+
+  await test('comboToWScript("win+l") → null (blocked by absence)', () => {
+    assert.equal(comboToWScript('win+l'), null);
+  });
+
+  await test('comboToWScript("ctrl+alt+del") → null (blocked by absence)', () => {
+    assert.equal(comboToWScript('ctrl+alt+del'), null);
+  });
+
+  await test('KEY_MAP has enter, escape, delete, backspace, tab', () => {
+    assert.ok('enter' in KEY_MAP);
+    assert.ok('escape' in KEY_MAP);
+    assert.ok('delete' in KEY_MAP);
+    assert.ok('backspace' in KEY_MAP);
+    assert.ok('tab' in KEY_MAP);
+  });
+
+  await test('NAMED_SHORTCUTS: undo → ctrl+z, save as → ctrl+shift+s', () => {
+    assert.equal(NAMED_SHORTCUTS['undo'], 'ctrl+z');
+    assert.equal(NAMED_SHORTCUTS['save as'], 'ctrl+shift+s');
+    assert.equal(NAMED_SHORTCUTS['save'], 'ctrl+s');
+  });
+
+  // typeText input validation (no PS call needed — fails before PS)
+  await test('typeText with empty string → ok: false (no PS call)', async () => {
+    const r = await typeText('');
+    assert.ok(!r.ok);
+    assert.ok(r.error.includes('No text'));
+  });
+
+  await test('typeText with only control characters → ok: false', async () => {
+    const r = await typeText('\x00\x01\x1F');
+    assert.ok(!r.ok);
+    assert.ok(r.error.includes('no printable'));
+  });
+
+  await test('typeText with 501 chars → ok: false (too long)', async () => {
+    const r = await typeText('a'.repeat(501));
+    assert.ok(!r.ok);
+    assert.ok(r.error.includes('too long'), `error: ${r.error}`);
+  });
+
+  // pressShortcut allowlist validation (no PS call — fails before PS)
+  await test('pressShortcut("win+l") → ok: false (not in allowlist)', async () => {
+    const r = await pressShortcut('win+l');
+    assert.ok(!r.ok);
+    assert.ok(r.error.includes('Unsupported'), `error: ${r.error}`);
+  });
+
+  await test('pressShortcut("ctrl+alt+del") → ok: false (not in allowlist)', async () => {
+    const r = await pressShortcut('ctrl+alt+del');
+    assert.ok(!r.ok);
+    assert.ok(r.error.includes('Unsupported'), `error: ${r.error}`);
+  });
+
+  await test('pressShortcut("alt+f4") → ok: false (not in allowlist)', async () => {
+    const r = await pressShortcut('alt+f4');
+    assert.ok(!r.ok);
+  });
+
+  // pressKey with unknown key (no PS call — fails before PS)
+  await test('pressKey("f16") → ok: false (unknown key)', async () => {
+    const r = await pressKey('f16');
+    assert.ok(!r.ok);
+    assert.ok(r.error.includes('Unknown key'), `error: ${r.error}`);
+  });
+
+  // verifier spawn_ok for input intents
+  await test('input.type → spawn_ok (verifier)', async () => {
+    const cr = { intent: 'input.type' };
+    const tr = { ok: true, data: { typed: 'hello' } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'spawn_ok');
+    assert.ok(r.verified);
+  });
+
+  await test('input.key → spawn_ok (verifier)', async () => {
+    const cr = { intent: 'input.key' };
+    const tr = { ok: true, data: { key: 'enter' } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'spawn_ok');
+    assert.ok(r.verified);
+  });
+
+  await test('input.shortcut → spawn_ok (verifier)', async () => {
+    const cr = { intent: 'input.shortcut' };
+    const tr = { ok: true, data: { combo: 'ctrl+c' } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'spawn_ok');
+    assert.ok(r.verified);
+  });
+}
+
 // ─── Run all suites ───────────────────────────────────────────────────────────
 
 (async () => {
-  console.log('\n╔══════════════════════════════════════════╗');
-  console.log('║  Jarvis Phase 1 — Milestone 1 Tier A Tests  ║');
-  console.log('╚══════════════════════════════════════════╝');
+  console.log('\n╔═══════════════════════════════════════════════════════╗');
+  console.log('║  Jarvis — Phase 1 + Phase 2 M2.1 + M2.2 Tier A Tests  ║');
+  console.log('╚═══════════════════════════════════════════════════════╝');
 
   await runPathTests();
   await runFileTests();
   await runClassifierTests();
   await runDispatcherTests();
   await runVerifierTests();
+  await runM21Tests();
+  await runM22ClassifierTests();
+  await runM22DispatcherTests();
 
   console.log('\n─────────────────────────────────────');
   console.log(`Results: ${passed} passed, ${failed} failed`);
 
   if (failed > 0) {
-    console.error('\nSome tests failed. Fix failures before moving to Milestone 2.');
+    console.error('\nSome tests failed.');
     process.exit(1);
   } else {
-    console.log('\nAll tests passed. Milestone 1 complete.');
+    console.log('\nAll tests passed. M2.1 + M2.2 complete.');
   }
 })();

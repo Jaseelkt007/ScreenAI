@@ -33,6 +33,7 @@ codex-skills/
 # electron-builder cache
 .cache/
 buildResources/
+.claude/
 
 # Duplicate/backup icon files (source icon should be icon.png)
 icon (*).png

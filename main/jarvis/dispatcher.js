@@ -65,12 +65,43 @@ async function dispatch(classifierResult) {
       return files.createDir({ name, locationHint: params.locationHint });
     }
 
-    // ── App ops (Electron) ────────────────────────────────────────────────────
+    // ── App ops (Electron / PowerShell) ──────────────────────────────────────
 
     case 'app.open': {
       const appName = requireParam(params.appName, 'app name');
       const { openApp } = require('./tools/apps');
       return openApp(appName);
+    }
+
+    case 'app.close': {
+      const appName = requireParam(params.appName, 'app name');
+      const { closeApp } = require('./tools/windows');
+      return closeApp(appName);
+    }
+
+    case 'app.focus': {
+      const appName = requireParam(params.appName, 'app name');
+      const { focusApp } = require('./tools/windows');
+      return focusApp(appName);
+    }
+
+    // ── Window ops (PowerShell) ───────────────────────────────────────────────
+
+    case 'window.minimize': {
+      // appName is optional — null means "active window"
+      const { minimizeWindow } = require('./tools/windows');
+      return minimizeWindow(params.appName || null);
+    }
+
+    case 'window.maximize': {
+      // appName is optional — null means "active window"
+      const { maximizeWindow } = require('./tools/windows');
+      return maximizeWindow(params.appName || null);
+    }
+
+    case 'window.switch': {
+      const { switchWindow } = require('./tools/windows');
+      return switchWindow();
     }
 
     // ── Browser ops (Electron) ────────────────────────────────────────────────
@@ -90,6 +121,26 @@ async function dispatch(classifierResult) {
       const query = requireParam(params.query, 'search query');
       const { search } = require('./tools/browser');
       return search(query);
+    }
+
+    // ── Keyboard / input ops (PowerShell) ────────────────────────────────────
+
+    case 'input.type': {
+      const text = requireParam(params.text, 'text to type');
+      const { typeText } = require('./tools/keyboard');
+      return typeText(text);
+    }
+
+    case 'input.key': {
+      const key = requireParam(params.key, 'key name');
+      const { pressKey } = require('./tools/keyboard');
+      return pressKey(key);
+    }
+
+    case 'input.shortcut': {
+      const combo = requireParam(params.combo, 'shortcut combo');
+      const { pressShortcut } = require('./tools/keyboard');
+      return pressShortcut(combo);
     }
 
     // ── Clipboard ops (Electron) ──────────────────────────────────────────────

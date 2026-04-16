@@ -73,6 +73,34 @@ async function verify(classifierResult, toolResult) {
           detail:   'launch returned success',
         };
 
+      case 'app.close': {
+        // process_gone: confirm the process is no longer running
+        const { data } = toolResult;
+        return {
+          verified: data && data.closed === true,
+          method:   'process_gone',
+          detail:   data && data.closed ? `${data.processName || 'process'} confirmed closed` : 'close not confirmed',
+        };
+      }
+
+      case 'app.focus':
+        // focus_assumed: we confirmed process exists and request was sent,
+        // but cannot verify the window actually came to foreground.
+        return {
+          verified: toolResult.ok === true,
+          method:   'focus_assumed',
+          detail:   'focus request sent; foreground state not confirmed',
+        };
+
+      case 'window.minimize':
+      case 'window.maximize':
+      case 'window.switch':
+        return {
+          verified: toolResult.ok === true,
+          method:   'spawn_ok',
+          detail:   'PowerShell command returned success',
+        };
+
       case 'browser.open':
       case 'browser.goto':
       case 'browser.search':
@@ -80,6 +108,15 @@ async function verify(classifierResult, toolResult) {
           verified: toolResult.ok === true,
           method:   'open_ok',
           detail:   data.url ? `opened ${data.url}` : 'shell.openExternal succeeded',
+        };
+
+      case 'input.type':
+      case 'input.key':
+      case 'input.shortcut':
+        return {
+          verified: toolResult.ok === true,
+          method:   'spawn_ok',
+          detail:   'keyboard command returned success',
         };
 
       case 'clipboard.write':

@@ -14,6 +14,16 @@
 
 const settings = require('../settings');
 const { INTENT_SYSTEM_PROMPT } = require('./prompts/intent');
+const { APP_NAMES } = require('./tools/app-names');
+
+// Build regex alternation string from APP_NAMES keys (e.g. "notepad|chrome|edge|...")
+// Sorted longest-first so longer names win over shorter subsets.
+// Keys are regex-escaped so names like "notepad++" don't cause SyntaxError.
+function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+const APP_NAMES_ALTS = Object.keys(APP_NAMES)
+  .sort((a, b) => b.length - a.length)
+  .map(escapeRegex)
+  .join('|');
 
 // ─── Pattern table ───────────────────────────────────────────────────────────
 // Rules are evaluated in order — first match wins.
@@ -105,6 +115,42 @@ const PATTERN_TABLE = [
     }),
   },
 
+  // ── app.close — before app.open to prevent "close" being caught by open/read patterns ──
+  // Pattern is built dynamically from APP_NAMES so adding an app there updates this too.
+  {
+    intent:  'app.close',
+    pattern: new RegExp(`\\b(close|quit|exit|terminate|shut\\s+down)\\b.{0,40}\\b(${APP_NAMES_ALTS})\\b`, 'i'),
+    extract: (m, t) => ({ appName: extractTargetAppName(t) }),
+  },
+
+  // ── app.focus ──
+  {
+    intent:  'app.focus',
+    pattern: new RegExp(`\\b(focus|switch\\s+to|bring\\s+up|show|foreground|go\\s+to)\\b.{0,40}\\b(${APP_NAMES_ALTS})\\b`, 'i'),
+    extract: (m, t) => ({ appName: extractTargetAppName(t) }),
+  },
+
+  // ── window.minimize ──
+  {
+    intent:  'window.minimize',
+    pattern: /\b(minimize|minimise|hide\s+window)\b/i,
+    extract: (m, t) => ({ appName: extractTargetAppName(t) || null }),
+  },
+
+  // ── window.maximize ──
+  {
+    intent:  'window.maximize',
+    pattern: /\b(maximize|maximise|full.?screen|make\s+it\s+bigger|expand\s+window)\b/i,
+    extract: (m, t) => ({ appName: extractTargetAppName(t) || null }),
+  },
+
+  // ── window.switch ──
+  {
+    intent:  'window.switch',
+    pattern: /\b(switch\s+window|alt.?tab|go\s+to\s+(last|previous|next)\s+window|next\s+window)\b/i,
+    extract: () => ({}),
+  },
+
   // ── app.open ──
   {
     intent:  'app.open',
@@ -165,6 +211,41 @@ const PATTERN_TABLE = [
       text: extractClipboardContent(t),
     }),
   },
+
+  // ── input.shortcut — named unambiguous aliases (save as before save, select all before others) ──
+  // Excluded aliases: "open","close","new","find","print" — collide with other intent patterns.
+  {
+    intent:  'input.shortcut',
+    pattern: /\b(save\s+as|select\s+all|undo|redo|copy|paste|cut|save)\b/i,
+    extract: (m, t) => ({ combo: extractNamedShortcut(t) }),
+  },
+
+  // ── input.shortcut — spoken modifier combos ("press control c", "hit ctrl shift s") ──
+  {
+    intent:  'input.shortcut',
+    pattern: /\b(press|hit|use)\b.{0,40}\b(ctrl|control|alt|shift)\b/i,
+    extract: (m, t) => ({ combo: extractShortcutCombo(t) }),
+  },
+
+  // ── input.key — single named key presses ("press enter", "press escape") ──
+  // Placed after input.shortcut so "press control enter" hits shortcut first.
+  {
+    intent:  'input.key',
+    pattern: /\bpress\b.{0,20}\b(enter|return|escape|esc|delete|del|backspace|space|tab|home|end|page\s+up|page\s+down|up|down|left|right)\b/i,
+    extract: (m, t) => ({ key: extractKeyName(t) }),
+  },
+
+  // ── input.type — catch-all for typing commands (MUST be last in table) ──
+  // Placed after all file.write patterns — pattern ordering prevents "write X to file.txt"
+  // from being swallowed here (file.write checks extension/file keyword first).
+  // Multi-word triggers (type this, write this) are listed BEFORE single-word (type, input)
+  // so the regex alternation matches the longer keyword first.
+  {
+    intent:  'input.type',
+    pattern: /\b(type\s+this|write\s+this|enter\s+this|type|input)\b[:\s]+(.+)/i,
+    extract: (m, t) => ({ text: extractTypedText(t) }),
+    // needsConfirm is handled by inferNeedsConfirm (reads jarvisInputConfirmMode setting)
+  },
 ];
 
 // Compile all patterns once at load
@@ -184,7 +265,9 @@ const COMPILED = PATTERN_TABLE.map((rule) => ({
  * @returns {Promise<ClassifierResult>}
  */
 async function classify(transcript, llmFn) {
-  const t = (transcript || '').trim();
+  // Strip trailing punctuation that STT frequently appends ("Can you open Spotify?")
+  // The ? breaks regex $ anchors and causes param extraction to return empty string.
+  const t = (transcript || '').trim().replace(/[?.!,…]+$/, '').trim();
   if (!t) {
     return unsupported(t, 'Empty transcript.');
   }
@@ -278,6 +361,16 @@ function inferNeedsConfirm(intent, params) {
   // file.write always confirm (may overwrite); file.append confirm if long content
   if (intent === 'file.write') return true;
   if (intent === 'file.append' && params.content && params.content.length > 200) return true;
+  // input.type: length-based confirm controlled by jarvisInputConfirmMode setting
+  // Architecture note (Phase 3 candidate): this mixes policy into the classifier.
+  // Cleaner long-term design: classifier emits {intent, params} only; policy layer
+  // decides needsConfirm. Acceptable for Phase 2 speed. Revisit in Phase 3.
+  if (intent === 'input.type') {
+    const mode = settings.getSetting('jarvisInputConfirmMode', 'long_only');
+    if (mode === 'always') return true;
+    if (mode === 'never')  return false;
+    return !!(params.text && params.text.length >= 80); // 'long_only' default
+  }
   return false;
 }
 
@@ -324,8 +417,25 @@ function ensureExtension(name) {
 
 /** Extract the app name from an "open X" command. */
 function extractAppName(t) {
-  const m = t.match(/\b(?:open|launch|start|run)\s+([\w\s]+?)(?:\s+(?:please|now|for me)|$)/i);
+  // Trailing punctuation is already stripped in classify() before t reaches here,
+  // but the trailing [?.!,] group is kept as a belt-and-suspenders fallback.
+  const m = t.match(/\b(?:open|launch|start|run)\s+([\w\s]+?)(?:\s+(?:please|now|for me)\b|[?.!,]|$)/i);
   return m ? m[1].trim().toLowerCase() : '';
+}
+
+/**
+ * Extract the target app name from close/focus/minimize/maximize commands.
+ * Scans APP_NAMES keys (longest first) to avoid partial matches.
+ * Returns the spoken/key name (lowercased) or null if not found.
+ */
+function extractTargetAppName(t) {
+  const lower = t.toLowerCase();
+  // APP_NAMES_ALTS is already sorted longest-first — reuse same order
+  const keys = Object.keys(APP_NAMES).sort((a, b) => b.length - a.length);
+  for (const key of keys) {
+    if (lower.includes(key)) return key;
+  }
+  return null;
 }
 
 /** Extract a URL from the transcript. */
@@ -373,6 +483,95 @@ function extractClipboardContent(t) {
 function extractSearchQuery(t) {
   const m = t.match(/\b(?:search(?:\s+for)?|google|look\s+up|find|look\s+for)\s+(.+)/i);
   return m ? m[1].trim() : t.trim();
+}
+
+// ─── M2.2 extraction helpers ──────────────────────────────────────────────────
+
+/**
+ * Extract named shortcut alias from the transcript.
+ * Returns the normalized combo string (e.g. "ctrl+z") or null.
+ * Longer phrases checked before shorter ones to avoid "save" matching before "save as".
+ */
+function extractNamedShortcut(t) {
+  const lower = t.toLowerCase();
+  if (/\bsave\s+as\b/.test(lower))    return 'ctrl+shift+s';
+  if (/\bselect\s+all\b/.test(lower)) return 'ctrl+a';
+  if (/\bundo\b/.test(lower))         return 'ctrl+z';
+  if (/\bredo\b/.test(lower))         return 'ctrl+y';
+  if (/\bcopy\b/.test(lower))         return 'ctrl+c';
+  if (/\bpaste\b/.test(lower))        return 'ctrl+v';
+  if (/\bcut\b/.test(lower))          return 'ctrl+x';
+  if (/\bsave\b/.test(lower))         return 'ctrl+s';
+  return null;
+}
+
+/**
+ * Extract a modifier-key shortcut combo from "press control c" style transcripts.
+ * Returns normalized combo string (e.g. "ctrl+c", "ctrl+shift+s", "alt+left") or null.
+ * Uses a finite phrase table — no generalized heuristic parsing.
+ */
+function extractShortcutCombo(t) {
+  // Try named alias first (catches "press save", "press undo" etc.)
+  const named = extractNamedShortcut(t);
+  if (named) return named;
+
+  const lower = t.toLowerCase();
+
+  // Finite phrase → combo table. Order: longer/more-specific first.
+  const SHORTCUT_PHRASES = [
+    [/\bctrl\s+shift\s+s\b|\bcontrol\s+shift\s+s\b/,  'ctrl+shift+s'],
+    [/\balt\s+left\b/,                                  'alt+left'],
+    [/\bctrl\s+c\b|\bcontrol\s+c\b/,                   'ctrl+c'],
+    [/\bctrl\s+v\b|\bcontrol\s+v\b/,                   'ctrl+v'],
+    [/\bctrl\s+x\b|\bcontrol\s+x\b/,                   'ctrl+x'],
+    [/\bctrl\s+z\b|\bcontrol\s+z\b/,                   'ctrl+z'],
+    [/\bctrl\s+y\b|\bcontrol\s+y\b/,                   'ctrl+y'],
+    [/\bctrl\s+a\b|\bcontrol\s+a\b/,                   'ctrl+a'],
+    [/\bctrl\s+s\b|\bcontrol\s+s\b/,                   'ctrl+s'],
+    [/\bctrl\s+t\b|\bcontrol\s+t\b/,                   'ctrl+t'],
+    [/\bctrl\s+w\b|\bcontrol\s+w\b/,                   'ctrl+w'],
+    [/\bctrl\s+l\b|\bcontrol\s+l\b/,                   'ctrl+l'],
+    [/\bctrl\s+r\b|\bcontrol\s+r\b/,                   'ctrl+r'],
+  ];
+
+  for (const [re, combo] of SHORTCUT_PHRASES) {
+    if (re.test(lower)) return combo;
+  }
+
+  return null; // Unknown combo → pressShortcut will return "Unsupported shortcut"
+}
+
+/**
+ * Extract the key name from "press X" commands.
+ * Scans KEY_MAP keys (longer names first to avoid "up" matching before "page up").
+ * Returns the spoken key name or null.
+ */
+function extractKeyName(t) {
+  const lower = t.toLowerCase();
+  // Import KEY_MAP keys from keyboard.js conceptually — we re-list them here
+  // to keep the classifier pure (no dependency on the execution layer).
+  const KNOWN_KEYS = [
+    'page up', 'page down', // multi-word first
+    'enter', 'return', 'escape', 'esc',
+    'delete', 'del', 'backspace', 'space', 'tab',
+    'home', 'end', 'up', 'down', 'left', 'right',
+  ];
+  for (const key of KNOWN_KEYS) {
+    const re = new RegExp(`\\b${escapeRegex(key)}\\b`);
+    if (re.test(lower)) return key;
+  }
+  return null;
+}
+
+/**
+ * Extract text to type from "type X", "input X", "type this: X" commands.
+ * Returns the raw text string (will be sanitized by keyboard.js).
+ */
+function extractTypedText(t) {
+  // Multi-word triggers FIRST to avoid "type" swallowing "type this".
+  // "type this: hello" | "type this hello" | "type hello" | "type: hello" | "input: hello"
+  const m = t.match(/\b(?:type\s+this|write\s+this|enter\s+this|type|input)\s*[:\s]\s*(.+)/i);
+  return m ? m[1].trim() : '';
 }
 
 // ─── Exports ──────────────────────────────────────────────────────────────────
