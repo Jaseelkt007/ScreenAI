@@ -8,7 +8,38 @@
   <link rel="stylesheet" href="overlay.css" />
 </head>
 <body>
-  <div id="hud" data-state="idle">
+  <div id="hud" data-state="idle" data-mode="compact">
+
+    <!-- ── Compact liquid-glass pill input (F7 initial state) ─────────── -->
+    <div id="compact-bar" aria-label="Ask anything">
+      <div class="cbar-shine" aria-hidden="true"></div>
+      <div class="cbar-sheen" aria-hidden="true"></div>
+
+      <div id="cbar-icon" aria-hidden="true">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+          <path d="M12 3L9.5 9.5H3L8.5 13.5L6 20L12 16L18 20L15.5 13.5L21 9.5H14.5L12 3Z"
+                fill="rgba(255,255,255,0.85)" />
+        </svg>
+      </div>
+
+      <input
+        id="compact-input"
+        type="text"
+        placeholder="Ask anything…"
+        autocomplete="off"
+        spellcheck="false"
+        autofocus
+      />
+
+      <button id="compact-send" aria-label="Send">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+          <path d="M12 19V5M5 12l7-7 7 7"
+                stroke="rgba(255,255,255,0.95)" stroke-width="2.2"
+                stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+    </div>
+
     <div id="bg-field" aria-hidden="true">
       <div class="bg-radial-top"></div>
       <div class="bg-radial-bottom"></div>
@@ -113,7 +144,6 @@
                 placeholder="Ask about this screen..."
                 rows="1"
                 spellcheck="false"
-                autofocus
               ></textarea>
               <button id="send-btn" aria-label="Send">
                 <span class="btn-text">ANALYZE</span>
