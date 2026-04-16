@@ -69,6 +69,11 @@ function getDefaults() {
     jarvisEnabled:       true,
     jarvisHotkey:        '',     // custom override; default is F9 / Shift+Command+J
     jarvisLlmFallback:   true,   // false = pattern-only mode, no API call on miss
+    // Jarvis input.type confirmation policy
+    // 'always'    — confirm before every typeText call
+    // 'long_only' — confirm only when text.length >= 80 (default)
+    // 'never'     — never confirm (use with care)
+    jarvisInputConfirmMode: 'long_only',
   };
 }
 

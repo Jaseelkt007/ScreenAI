@@ -12,6 +12,9 @@
 const { shell } = require('electron');
 const { spawn }  = require('child_process');
 const fs         = require('fs');
+// APP_NAMES imported for consistency — windows.js uses it for close/focus operations.
+// Both modules share the same spoken-name → process-name map.
+const { APP_NAMES } = require('./app-names'); // eslint-disable-line no-unused-vars
 
 // ─── Launch strategies ───────────────────────────────────────────────────────
 

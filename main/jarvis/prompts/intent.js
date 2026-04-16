@@ -15,6 +15,14 @@ const SUPPORTED_INTENTS = [
   'file.list',
   'file.mkdir',
   'app.open',
+  'app.close',
+  'app.focus',
+  'window.minimize',
+  'window.maximize',
+  'window.switch',
+  'input.type',
+  'input.key',
+  'input.shortcut',
   'browser.open',
   'browser.goto',
   'browser.search',
@@ -50,17 +58,25 @@ Do not return any text outside the JSON. Do not explain your reasoning.
 
 ## Supported intents
 
-- file.create     — create a new empty file
-- file.read       — read and return the contents of a file
-- file.write      — write (overwrite) text content to a file
-- file.append     — append text to an existing file
-- file.list       — list contents of a directory
-- file.mkdir      — create a new directory/folder
-- app.open        — open an application by name
-- browser.open    — open the default web browser
-- browser.goto    — navigate to a specific URL
-- browser.search  — search Google for a query
-- clipboard.write — copy text to the system clipboard
+- file.create      — create a new empty file
+- file.read        — read and return the contents of a file
+- file.write       — write (overwrite) text content to a file
+- file.append      — append text to an existing file
+- file.list        — list contents of a directory
+- file.mkdir       — create a new directory/folder
+- app.open         — open/launch an application by name
+- app.close        — close/quit a named application gracefully
+- app.focus        — focus/bring to foreground a named application
+- window.minimize  — minimize the active window (or a named app window if specified)
+- window.maximize  — maximize the active window (or a named app window if specified)
+- window.switch    — switch to the previous window (Alt+Tab)
+- input.type       — type text into the focused application
+- input.key        — press a single named key (enter, escape, delete, etc.)
+- input.shortcut   — press a keyboard shortcut (ctrl+c, save, undo, etc.)
+- browser.open     — open the default web browser
+- browser.goto     — navigate to a specific URL
+- browser.search   — search Google for a query
+- clipboard.write  — copy text to the system clipboard
 - system.unsupported — command is not supported or cannot be understood
 
 ## Rules
@@ -71,6 +87,10 @@ Do not return any text outside the JSON. Do not explain your reasoning.
 4. For system.unsupported, always include a "reason" field.
 5. Do not invent intents. Use only the list above.
 6. If the command references a file operation but you cannot extract the filename, use system.unsupported.
+7. app.close and app.focus require "appName". window.minimize and window.maximize have optional "appName" (omit if no app specified).
+8. window.switch never has params.
+9. input.type requires "text". input.key requires "key". input.shortcut requires "combo".
+10. input.shortcut "combo" values: "ctrl+c", "ctrl+v", "ctrl+z", "ctrl+y", "ctrl+a", "ctrl+s", "ctrl+shift+s", "ctrl+t", "ctrl+w", "ctrl+l", "ctrl+r", "alt+left". Named: "undo"→"ctrl+z", "redo"→"ctrl+y", "copy"→"ctrl+c", "paste"→"ctrl+v", "save"→"ctrl+s", "save as"→"ctrl+shift+s".
 
 ## Few-shot examples
 
@@ -137,6 +157,114 @@ Transcript: "copy to clipboard: the quick brown fox"
   "needsConfirm": false
 }
 
+Transcript: "close notepad"
+{
+  "intent": "app.close",
+  "confidence": "llm",
+  "params": { "appName": "notepad" },
+  "raw": "close notepad",
+  "needsConfirm": false
+}
+
+Transcript: "quit spotify"
+{
+  "intent": "app.close",
+  "confidence": "llm",
+  "params": { "appName": "spotify" },
+  "raw": "quit spotify",
+  "needsConfirm": false
+}
+
+Transcript: "focus chrome"
+{
+  "intent": "app.focus",
+  "confidence": "llm",
+  "params": { "appName": "chrome" },
+  "raw": "focus chrome",
+  "needsConfirm": false
+}
+
+Transcript: "switch to edge"
+{
+  "intent": "app.focus",
+  "confidence": "llm",
+  "params": { "appName": "edge" },
+  "raw": "switch to edge",
+  "needsConfirm": false
+}
+
+Transcript: "minimize"
+{
+  "intent": "window.minimize",
+  "confidence": "llm",
+  "params": {},
+  "raw": "minimize",
+  "needsConfirm": false
+}
+
+Transcript: "minimize chrome"
+{
+  "intent": "window.minimize",
+  "confidence": "llm",
+  "params": { "appName": "chrome" },
+  "raw": "minimize chrome",
+  "needsConfirm": false
+}
+
+Transcript: "maximize window"
+{
+  "intent": "window.maximize",
+  "confidence": "llm",
+  "params": {},
+  "raw": "maximize window",
+  "needsConfirm": false
+}
+
+Transcript: "switch window"
+{
+  "intent": "window.switch",
+  "confidence": "llm",
+  "params": {},
+  "raw": "switch window",
+  "needsConfirm": false
+}
+
+Transcript: "type hello world"
+{
+  "intent": "input.type",
+  "confidence": "llm",
+  "params": { "text": "hello world" },
+  "raw": "type hello world",
+  "needsConfirm": false
+}
+
+Transcript: "press enter"
+{
+  "intent": "input.key",
+  "confidence": "llm",
+  "params": { "key": "enter" },
+  "raw": "press enter",
+  "needsConfirm": false
+}
+
+Transcript: "press control c"
+{
+  "intent": "input.shortcut",
+  "confidence": "llm",
+  "params": { "combo": "ctrl+c" },
+  "raw": "press control c",
+  "needsConfirm": false
+}
+
+Transcript: "undo"
+{
+  "intent": "input.shortcut",
+  "confidence": "llm",
+  "params": { "combo": "ctrl+z" },
+  "raw": "undo",
+  "needsConfirm": false
+}
+
 Transcript: "delete all my files"
 {
   "intent": "system.unsupported",
@@ -144,7 +272,7 @@ Transcript: "delete all my files"
   "params": {},
   "raw": "delete all my files",
   "needsConfirm": false,
-  "reason": "File deletion is not supported in Phase 1."
+  "reason": "File deletion is not supported."
 }
 `.trim();
 
