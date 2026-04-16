@@ -1207,16 +1207,29 @@ kbd {
   width: 100%;
   height: 50px;
   border-radius: 50px;
-  background: linear-gradient(130deg, rgba(108,140,255,0.42) 0%, rgba(148,108,255,0.38) 100%);
-  backdrop-filter: blur(44px) saturate(1.9) brightness(1.08);
-  -webkit-backdrop-filter: blur(44px) saturate(1.9) brightness(1.08);
-  border: 1px solid rgba(255,255,255,0.28);
+  /*
+   * Layered background (top → bottom):
+   *   1. inner highlight — soft top reflection for glass depth
+   *   2. colour tint — subtle blue-purple identity gradient
+   *   3. base fill   — dark, desaturated glass base
+   */
+  background:
+    linear-gradient(to bottom,
+      rgba(255,255,255,0.25) 0%,
+      rgba(255,255,255,0.05) 30%,
+      transparent 60%
+    ),
+    linear-gradient(90deg,
+      rgba(80,100,255,0.25) 0%,
+      rgba(140,80,255,0.25) 100%
+    ),
+    rgba(20,20,40,0.45);
+  backdrop-filter: blur(40px) saturate(1.6) brightness(0.95);
+  -webkit-backdrop-filter: blur(40px) saturate(1.6) brightness(0.95);
+  border: 1px solid rgba(255,255,255,0.18);
   box-shadow:
-    0 18px 52px rgba(100,80,255,0.34),
-    0 8px 22px rgba(108,140,255,0.22),
-    0 3px 8px rgba(80,80,200,0.16),
-    inset 0 1.5px 0 rgba(255,255,255,0.40),
-    inset 0 -1px 0 rgba(255,255,255,0.06);
+    0 10px 40px rgba(0,0,0,0.50),
+    0 0 20px rgba(120,100,255,0.15);
   padding: 0 10px 0 16px;
   gap: 0;
   overflow: hidden;
@@ -1309,15 +1322,15 @@ kbd {
   font-size: 14px;
   font-weight: 400;
   letter-spacing: 0.016em;
-  color: rgba(255,255,255,0.94);
-  caret-color: rgba(190,168,255,0.95);
+  color: #ffffff;
+  caret-color: #ffffff;
   -webkit-app-region: no-drag;
   user-select: text;
   -webkit-user-select: text;
 }
 
 #compact-input::placeholder {
-  color: rgba(255,255,255,0.48);
+  color: rgba(255,255,255,0.85);
 }
 
 #compact-input:disabled {
@@ -1331,20 +1344,19 @@ kbd {
   width: 38px;
   height: 38px;
   border-radius: 50%;
-  background: linear-gradient(140deg, rgba(108,145,255,0.84) 0%, rgba(148,100,255,0.80) 100%);
+  background: rgba(255,255,255,0.15);
   border: 1px solid rgba(255,255,255,0.28);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   box-shadow:
-    0 5px 16px rgba(108,100,255,0.50),
-    0 2px 6px rgba(138,108,255,0.38),
-    inset 0 1px 0 rgba(255,255,255,0.34);
+    0 0 10px rgba(140,120,255,0.60),
+    inset 0 1px 0 rgba(255,255,255,0.30);
   color: rgba(255,255,255,0.95);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: transform 0.12s, box-shadow 0.15s;
+  transition: transform 0.12s, box-shadow 0.15s, background 0.15s;
   -webkit-app-region: no-drag;
   overflow: hidden;
 }
@@ -1363,9 +1375,9 @@ kbd {
 }
 
 #compact-send:hover {
+  background: rgba(255,255,255,0.22);
   box-shadow:
-    0 7px 22px rgba(108,100,255,0.60),
-    0 3px 9px rgba(138,108,255,0.48),
+    0 0 16px rgba(140,120,255,0.80),
     inset 0 1px 0 rgba(255,255,255,0.34);
 }
 

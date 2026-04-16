@@ -16,7 +16,7 @@
 
 'use strict';
 
-const { Jimp } = require('jimp');
+const Jimp = require('jimp');
 const fs   = require('fs');
 const path = require('path');
 
@@ -34,16 +34,16 @@ async function createIcon() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
   const src = await Jimp.read(SRC);
-  src.scaleToFit({ w: SIZE, h: SIZE });
+  src.scaleToFit(SIZE, SIZE);
 
-  const canvas = new Jimp({ width: SIZE, height: SIZE, color: 0x00000000 });
+  const canvas = await new Jimp(SIZE, SIZE, 0x00000000);
   canvas.composite(
     src,
     Math.round((SIZE - src.bitmap.width)  / 2),
     Math.round((SIZE - src.bitmap.height) / 2)
   );
 
-  await canvas.write(OUT_PNG);
+  await canvas.writeAsync(OUT_PNG);
   console.log(`✓ Icon written : ${OUT_PNG} (${SIZE}×${SIZE} px)`);
 }
 
