@@ -123,6 +123,25 @@ async function dispatch(classifierResult) {
       return search(query);
     }
 
+    // Phase 2.3: browser keyboard control. These are guarded because they send
+    // shortcuts to the already-focused browser window. Do NOT apply this guard
+    // to browser.open/goto/search — those are Phase 1 navigation intents.
+
+    case 'browser.newtab':
+      return dispatchBrowserShortcut('ctrl+t');
+
+    case 'browser.closetab':
+      return dispatchBrowserShortcut('ctrl+w');
+
+    case 'browser.back':
+      return dispatchBrowserShortcut('alt+left');
+
+    case 'browser.refresh':
+      return dispatchBrowserShortcut('ctrl+r');
+
+    case 'browser.addressbar':
+      return dispatchBrowserShortcut('ctrl+l');
+
     // ── Keyboard / input ops (PowerShell) ────────────────────────────────────
 
     case 'input.type': {
@@ -178,6 +197,42 @@ function requireParam(value, label) {
     throw new DispatchError(`Missing required parameter: ${label}`);
   }
   return value;
+}
+
+async function dispatchBrowserShortcut(combo) {
+  const { isBrowserFocused, restoreWindowAndCheckBrowser } = require('./tools/windows');
+  const { pressShortcut } = require('./tools/keyboard');
+  const { consumePendingTypeTargetWindowHandle } = require('./typing-target');
+
+  // The stored window handle was captured before the Jarvis HUD was shown
+  // (via rememberTypeTargetWindow in index.js). By dispatch time the HUD
+  // has foreground focus, so isBrowserFocused() would incorrectly see the
+  // Electron process. When we have the stored handle we restore focus to
+  // the user's previous window first, then verify it is a browser.
+  const storedHandle = consumePendingTypeTargetWindowHandle();
+  console.log(`[Jarvis] browserShortcut: combo=${combo} storedHandle=${storedHandle}`);
+
+  let focusState;
+  if (storedHandle) {
+    focusState = await restoreWindowAndCheckBrowser(storedHandle);
+  } else {
+    // No stored handle (e.g. text-command path or non-Windows). Fall back to
+    // checking the current foreground window — works correctly when the HUD
+    // has not stolen focus.
+    focusState = await isBrowserFocused();
+  }
+
+  console.log(`[Jarvis] browserShortcut: focusState=${JSON.stringify(focusState)}`);
+
+  if (!focusState || focusState.focused !== true) {
+    return {
+      ok: false,
+      error: 'No browser is focused. Switch to a browser window first.',
+      action: '',
+    };
+  }
+
+  return pressShortcut(combo);
 }
 
 module.exports = { dispatch, DispatchError };

@@ -47,6 +47,24 @@ function section(title) {
   console.log(`\n── ${title} ──`);
 }
 
+async function withPatchedExports(modulePath, patches, fn) {
+  const mod = require(modulePath);
+  const originals = {};
+
+  for (const [key, replacement] of Object.entries(patches)) {
+    originals[key] = mod[key];
+    mod[key] = replacement;
+  }
+
+  try {
+    return await fn(mod);
+  } finally {
+    for (const [key, original] of Object.entries(originals)) {
+      mod[key] = original;
+    }
+  }
+}
+
 // ─── Cleanup helpers ──────────────────────────────────────────────────────────
 
 // Track created files/dirs so we can clean up after tests
@@ -1007,12 +1025,295 @@ async function runM22DispatcherTests() {
   });
 }
 
+// ─── 9. Phase 2 M2.3 — browser keyboard control ──────────────────────────────
+
+async function runM23Tests() {
+  section('9. M2.3 — Browser keyboard control');
+
+  const classifierCases = [
+    { t: 'new tab',            intent: 'browser.newtab' },
+    { t: 'open new tab',       intent: 'browser.newtab' },
+    { t: 'close tab',          intent: 'browser.closetab' },
+    { t: 'close current tab',  intent: 'browser.closetab' },
+    { t: 'go back',            intent: 'browser.back' },
+    { t: 'previous page',      intent: 'browser.back' },
+    { t: 'refresh page',       intent: 'browser.refresh' },
+    { t: 'reload tab',         intent: 'browser.refresh' },
+    { t: 'focus address bar',  intent: 'browser.addressbar' },
+    { t: 'url bar',            intent: 'browser.addressbar' },
+  ];
+
+  for (const { t, intent } of classifierCases) {
+    await test(`"${t}" → ${intent}`, async () => {
+      const r = await classify(t, LLM_NEVER_CALLED);
+      assert.equal(r.intent, intent, `Got "${r.intent}"`);
+      assert.equal(r.confidence, 'pattern');
+      assert.deepEqual(r.params, {});
+      assert.equal(r.needsConfirm, false);
+    });
+  }
+
+  await test('"close tab" → browser.closetab (NOT app.close)', async () => {
+    const r = await classify('close tab', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.closetab');
+  });
+
+  await test('"close notepad" → app.close (NOT browser.closetab)', async () => {
+    const r = await classify('close notepad', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'app.close');
+    assert.equal(r.params.appName, 'notepad');
+  });
+
+  await test('"go to github.com" → browser.goto (NOT browser.back)', async () => {
+    const r = await classify('go to github.com', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.goto');
+    assert.ok(r.params.url.includes('github.com'));
+  });
+
+  section('9b. M2.3 — Dispatcher focus guard and routing');
+
+  const dispatchCases = [
+    { intent: 'browser.newtab',    combo: 'ctrl+t' },
+    { intent: 'browser.closetab',  combo: 'ctrl+w' },
+    { intent: 'browser.back',      combo: 'alt+left' },
+    { intent: 'browser.refresh',   combo: 'ctrl+r' },
+    { intent: 'browser.addressbar', combo: 'ctrl+l' },
+  ];
+
+  for (const { intent, combo } of dispatchCases) {
+    await test(`${intent} with focused browser → pressShortcut("${combo}")`, async () => {
+      let receivedCombo = null;
+
+      await withPatchedExports('./tools/windows', {
+        isBrowserFocused: async () => ({ focused: true, processName: 'chrome' }),
+      }, async () => {
+        await withPatchedExports('./tools/keyboard', {
+          pressShortcut: async (actualCombo) => {
+            receivedCombo = actualCombo;
+            return { ok: true, data: { combo: actualCombo }, action: `Pressed ${actualCombo}.` };
+          },
+        }, async () => {
+          const r = await dispatch({ intent, params: {}, raw: intent, needsConfirm: false });
+          assert.ok(r.ok, r.error);
+          assert.equal(receivedCombo, combo);
+        });
+      });
+    });
+  }
+
+  await test('browser.newtab with no focused browser → helpful error and no shortcut sent', async () => {
+    let shortcutCalls = 0;
+
+    await withPatchedExports('./tools/windows', {
+      isBrowserFocused: async () => ({ focused: false, processName: null }),
+    }, async () => {
+      await withPatchedExports('./tools/keyboard', {
+        pressShortcut: async () => {
+          shortcutCalls++;
+          return { ok: true, data: {}, action: 'should not be called' };
+        },
+      }, async () => {
+        const r = await dispatch({ intent: 'browser.newtab', params: {}, raw: 'new tab', needsConfirm: false });
+        assert.ok(!r.ok);
+        assert.equal(r.error, 'No browser is focused. Switch to a browser window first.');
+        assert.equal(shortcutCalls, 0);
+      });
+    });
+  });
+
+  section('9c. M2.3 — Verifier: browser keyboard intents');
+
+  for (const { intent, combo } of dispatchCases) {
+    await test(`${intent} → spawn_ok (verifier)`, async () => {
+      const cr = { intent };
+      const tr = { ok: true, data: { combo } };
+      const r  = await verify(cr, tr);
+      assert.equal(r.method, 'spawn_ok');
+      assert.ok(r.verified);
+    });
+  }
+}
+
+// ─── 10. Phase 2 M2.4 — Suite 8: Verifier Phase 2 ───────────────────────────
+
+async function runM24VerifierTests() {
+  section('10. M2.4 — Suite 8: Verifier Phase 2');
+
+  // app.close: process_gone — verified when data.closed === true
+  await test('app.close toolResult.ok=true, data.closed=true → process_gone verified:true', async () => {
+    const cr = { intent: 'app.close' };
+    const tr = { ok: true, data: { closed: true, processName: 'notepad' } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'process_gone');
+    assert.ok(r.verified);
+    assert.ok(r.detail.includes('notepad'));
+  });
+
+  await test('app.close toolResult.ok=true, data.closed=false → process_gone verified:false', async () => {
+    const cr = { intent: 'app.close' };
+    const tr = { ok: true, data: { closed: false, processName: 'notepad' } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'process_gone');
+    assert.ok(!r.verified);
+  });
+
+  await test('app.close toolResult.ok=false → skipped (tool reported failure)', async () => {
+    const cr = { intent: 'app.close' };
+    const tr = { ok: false, error: 'not running' };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'skipped');
+    assert.ok(!r.verified);
+  });
+
+  // app.focus: focus_assumed — always true when ok, honest method name
+  await test('app.focus toolResult.ok=true → focus_assumed verified:true', async () => {
+    const cr = { intent: 'app.focus' };
+    const tr = { ok: true, data: { focused: true, processName: 'chrome' } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'focus_assumed');
+    assert.ok(r.verified);
+  });
+
+  await test('app.focus toolResult.ok=false → skipped', async () => {
+    const cr = { intent: 'app.focus' };
+    const tr = { ok: false, error: 'not running' };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'skipped');
+  });
+
+  // window.minimize / window.maximize / window.switch → spawn_ok
+  await test('window.minimize → spawn_ok verified:true', async () => {
+    const cr = { intent: 'window.minimize' };
+    const tr = { ok: true, data: {} };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'spawn_ok');
+    assert.ok(r.verified);
+  });
+
+  await test('window.maximize → spawn_ok verified:true', async () => {
+    const cr = { intent: 'window.maximize' };
+    const tr = { ok: true, data: {} };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'spawn_ok');
+    assert.ok(r.verified);
+  });
+
+  await test('window.switch → spawn_ok verified:true', async () => {
+    const cr = { intent: 'window.switch' };
+    const tr = { ok: true, data: {} };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'spawn_ok');
+    assert.ok(r.verified);
+  });
+}
+
+// ─── 11. Phase 2 M2.4 — Suite 10: Synonym & coverage tests ──────────────────
+
+async function runM24SynonymTests() {
+  section('11. M2.4 — Suite 10: Synonym and coverage tests');
+
+  // ── app.open synonyms ──
+  await test('"start chrome" → app.open', async () => {
+    const r = await classify('start chrome', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'app.open');
+    assert.equal(r.confidence, 'pattern');
+  });
+
+  await test('"run notepad" → app.open', async () => {
+    const r = await classify('run notepad', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'app.open');
+  });
+
+  await test('"launch spotify" → app.open', async () => {
+    const r = await classify('launch spotify', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'app.open');
+  });
+
+  // ── app.close synonyms ──
+  await test('"exit chrome" → app.close + appName=chrome', async () => {
+    const r = await classify('exit chrome', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'app.close');
+    assert.equal(r.params.appName, 'chrome');
+  });
+
+  await test('"terminate notepad" → app.close', async () => {
+    const r = await classify('terminate notepad', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'app.close');
+    assert.equal(r.params.appName, 'notepad');
+  });
+
+  await test('"shut down edge" → app.close', async () => {
+    const r = await classify('shut down edge', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'app.close');
+    assert.equal(r.params.appName, 'edge');
+  });
+
+  // ── app.focus synonyms ──
+  await test('"bring chrome" → app.focus (bare bring)', async () => {
+    const r = await classify('bring chrome', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'app.focus');
+    assert.equal(r.params.appName, 'chrome');
+  });
+
+  await test('"foreground notepad" → app.focus', async () => {
+    const r = await classify('foreground notepad', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'app.focus');
+    assert.equal(r.params.appName, 'notepad');
+  });
+
+  // ── browser.search synonyms ──
+  await test('"look up python tutorial" → browser.search', async () => {
+    const r = await classify('look up python tutorial', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.search');
+    assert.ok(r.params.query.includes('python'));
+  });
+
+  await test('"google best pizza" → browser.search', async () => {
+    const r = await classify('google best pizza', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.search');
+    assert.ok(r.params.query.includes('best pizza'));
+  });
+
+  // ── file.create: touch ──
+  await test('"touch notes.txt" → file.create (touch pattern)', async () => {
+    const r = await classify('touch notes.txt', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.create');
+    assert.equal(r.params.name, 'notes.txt');
+  });
+
+  // ── input.type: write out ──
+  await test('"write out hello world" → input.type', async () => {
+    const r = await classify('write out hello world', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'input.type');
+    assert.equal(r.params.text, 'hello world');
+  });
+
+  // ── Named shortcut: save (no collision with file.write) ──
+  await test('"save" alone → input.shortcut combo:ctrl+s (not file.write)', async () => {
+    const r = await classify('save', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'input.shortcut');
+    assert.equal(r.params.combo, 'ctrl+s');
+  });
+
+  // ── Ordering: write collision ──
+  await test('"write hello to notes.txt" → file.write (NOT input.type)', async () => {
+    const r = await classify('write hello to notes.txt', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.write');
+  });
+
+  await test('"write this text hello" → input.type (NOT file.write)', async () => {
+    const r = await classify('write this text hello', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'input.type');
+    assert.ok(r.params.text.includes('hello'));
+  });
+}
+
 // ─── Run all suites ───────────────────────────────────────────────────────────
 
 (async () => {
-  console.log('\n╔═══════════════════════════════════════════════════════╗');
-  console.log('║  Jarvis — Phase 1 + Phase 2 M2.1 + M2.2 Tier A Tests  ║');
-  console.log('╚═══════════════════════════════════════════════════════╝');
+  console.log('\n╔════════════════════════════════════════════════════════════════════╗');
+  console.log('║  Jarvis — Phase 1 + Phase 2 M2.1 + M2.2 + M2.3 + M2.4 Tier A Tests  ║');
+  console.log('╚════════════════════════════════════════════════════════════════════╝');
 
   await runPathTests();
   await runFileTests();
@@ -1022,6 +1323,9 @@ async function runM22DispatcherTests() {
   await runM21Tests();
   await runM22ClassifierTests();
   await runM22DispatcherTests();
+  await runM23Tests();
+  await runM24VerifierTests();
+  await runM24SynonymTests();
 
   console.log('\n─────────────────────────────────────');
   console.log(`Results: ${passed} passed, ${failed} failed`);
@@ -1030,6 +1334,6 @@ async function runM22DispatcherTests() {
     console.error('\nSome tests failed.');
     process.exit(1);
   } else {
-    console.log('\nAll tests passed. M2.1 + M2.2 complete.');
+    console.log('\nAll tests passed. Phase 2 M2.4 complete.');
   }
 })();

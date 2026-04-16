@@ -50,6 +50,16 @@ const PATTERN_TABLE = [
     }),
   },
 
+  // ── file.create (touch <filename>) — Unix-style "touch notes.txt" ──
+  {
+    intent:  'file.create',
+    pattern: /\btouch\s+[\w.-]+/i,
+    extract: (m, t) => ({
+      name:         ensureExtension(extractFilenameWithExt(t) || (t.match(/\btouch\s+([\w.-]+)/i)?.[1]) || 'untitled.txt'),
+      locationHint: extractLocation(t),
+    }),
+  },
+
   // ── file.append — check before file.write ──
   {
     intent:  'file.append',
@@ -126,7 +136,7 @@ const PATTERN_TABLE = [
   // ── app.focus ──
   {
     intent:  'app.focus',
-    pattern: new RegExp(`\\b(focus|switch\\s+to|bring\\s+up|show|foreground|go\\s+to)\\b.{0,40}\\b(${APP_NAMES_ALTS})\\b`, 'i'),
+    pattern: new RegExp(`\\b(focus|switch\\s+to|bring(?:\\s+up)?|show|foreground|go\\s+to)\\b.{0,40}\\b(${APP_NAMES_ALTS})\\b`, 'i'),
     extract: (m, t) => ({ appName: extractTargetAppName(t) }),
   },
 
@@ -158,6 +168,42 @@ const PATTERN_TABLE = [
     extract: (m, t) => ({
       appName: extractAppName(t),
     }),
+  },
+
+  // ── browser.newtab — before browser.closetab; explicit "new tab" only ──
+  // Intentionally excludes bare "open tab" — too vague and collision-prone.
+  {
+    intent:  'browser.newtab',
+    pattern: /\b(new\s+tab|open\s+(?:a\s+)?new\s+tab|create\s+(?:a\s+)?tab)\b/i,
+    extract: () => ({}),
+  },
+
+  // ── browser.closetab — explicit tab phrasing; does NOT collide with app.close ──
+  {
+    intent:  'browser.closetab',
+    pattern: /\b(close\s+(?:this\s+|the\s+|current\s+)?tab|shut\s+the\s+tab)\b/i,
+    extract: () => ({}),
+  },
+
+  // ── browser.back ──
+  {
+    intent:  'browser.back',
+    pattern: /\b(go\s+back|browser\s+back|previous\s+page|back\s+button|navigate\s+back)\b/i,
+    extract: () => ({}),
+  },
+
+  // ── browser.refresh ──
+  {
+    intent:  'browser.refresh',
+    pattern: /\b(refresh|reload|reload\s+page|refresh\s+page|reload\s+tab|refresh\s+tab)\b/i,
+    extract: () => ({}),
+  },
+
+  // ── browser.addressbar ──
+  {
+    intent:  'browser.addressbar',
+    pattern: /\b(focus\s+address\s+bar|go\s+to\s+(?:url|address)\s+bar|open\s+address\s+bar|url\s+bar|address\s+bar)\b/i,
+    extract: () => ({}),
   },
 
   // ── browser.open ──
@@ -238,11 +284,10 @@ const PATTERN_TABLE = [
   // ── input.type — catch-all for typing commands (MUST be last in table) ──
   // Placed after all file.write patterns — pattern ordering prevents "write X to file.txt"
   // from being swallowed here (file.write checks extension/file keyword first).
-  // Multi-word triggers (type this, write this) are listed BEFORE single-word (type, input)
-  // so the regex alternation matches the longer keyword first.
+  // Multi-word triggers listed BEFORE single-word ones so the longer keyword wins.
   {
     intent:  'input.type',
-    pattern: /\b(type\s+this|write\s+this|enter\s+this|type|input)\b[:\s]+(.+)/i,
+    pattern: /\b(type\s+this|write\s+this|write\s+out|enter\s+this|type|input)\b[:\s]+(.+)/i,
     extract: (m, t) => ({ text: extractTypedText(t) }),
     // needsConfirm is handled by inferNeedsConfirm (reads jarvisInputConfirmMode setting)
   },
@@ -569,8 +614,8 @@ function extractKeyName(t) {
  */
 function extractTypedText(t) {
   // Multi-word triggers FIRST to avoid "type" swallowing "type this".
-  // "type this: hello" | "type this hello" | "type hello" | "type: hello" | "input: hello"
-  const m = t.match(/\b(?:type\s+this|write\s+this|enter\s+this|type|input)\s*[:\s]\s*(.+)/i);
+  // Handles: "type this: hello" | "write this hello" | "write out hello" | "type hello"
+  const m = t.match(/\b(?:type\s+this|write\s+this|write\s+out|enter\s+this|type|input)\s*[:\s]\s*(.+)/i);
   return m ? m[1].trim() : '';
 }
 

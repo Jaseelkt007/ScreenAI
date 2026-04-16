@@ -113,6 +113,11 @@ async function verify(classifierResult, toolResult) {
       case 'input.type':
       case 'input.key':
       case 'input.shortcut':
+      case 'browser.newtab':
+      case 'browser.closetab':
+      case 'browser.back':
+      case 'browser.refresh':
+      case 'browser.addressbar':
         return {
           verified: toolResult.ok === true,
           method:   'spawn_ok',

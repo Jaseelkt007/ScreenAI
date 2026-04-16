@@ -351,10 +351,10 @@ async function isBrowserFocused() {
 ${WIN32_TYPE_DEF}
 $hwnd = [JarvisWin32]::GetForegroundWindow()
 if ($hwnd -eq [IntPtr]::Zero) { Write-Output 'NONE'; exit 0 }
-$pid = 0
-[JarvisWin32]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null
-if ($pid -eq 0) { Write-Output 'NONE'; exit 0 }
-$proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+$wpid = 0
+[JarvisWin32]::GetWindowThreadProcessId($hwnd, [ref]$wpid) | Out-Null
+if ($wpid -eq 0) { Write-Output 'NONE'; exit 0 }
+$proc = Get-Process -Id $wpid -ErrorAction SilentlyContinue
 if (-not $proc) { Write-Output 'NONE'; exit 0 }
 Write-Output $proc.ProcessName
 `;
@@ -370,6 +370,61 @@ Write-Output $proc.ProcessName
     return { focused, processName: procName };
   } catch {
     // Fail-safe: any unexpected error → not focused
+    return { focused: false, processName: null };
+  }
+}
+
+/**
+ * Restore focus to a previously-captured window handle and check if that
+ * window belongs to a known browser process.
+ *
+ * Used by dispatchBrowserShortcut when the Jarvis HUD has stolen foreground
+ * focus from the browser. The handle was captured via captureForegroundWindow()
+ * before the HUD was shown, so it points to the user's real prior window.
+ *
+ * Steps:
+ *   1. Call SetForegroundWindow on the stored handle.
+ *   2. Wait 150 ms for the OS to commit the focus change.
+ *   3. Look up the process name for that specific handle (not GetForegroundWindow —
+ *      we already know the handle, so we use GetWindowThreadProcessId directly).
+ *   4. Return { focused, processName } based on whether the process is a browser.
+ *
+ * Fail-safe: any PS error, timeout, or invalid handle returns { focused: false, processName: null }.
+ *
+ * @param {string} windowHandle — decimal HWND string from captureForegroundWindow()
+ * @returns {Promise<{ focused: boolean, processName: string|null }>}
+ */
+async function restoreWindowAndCheckBrowser(windowHandle) {
+  // windowHandle is validated to /^-?\d+$/ by typing-target.js; guard anyway.
+  if (!windowHandle || !/^-?\d+$/.test(windowHandle)) {
+    return { focused: false, processName: null };
+  }
+
+  const script = `
+${WIN32_TYPE_DEF}
+$hwndValue = [Int64]::Parse('${windowHandle}')
+$hwnd = [IntPtr]::new($hwndValue)
+if ($hwnd -eq [IntPtr]::Zero) { Write-Output 'NONE'; exit 0 }
+[JarvisWin32]::SetForegroundWindow($hwnd) | Out-Null
+Start-Sleep -Milliseconds 150
+$wpid = 0
+[JarvisWin32]::GetWindowThreadProcessId($hwnd, [ref]$wpid) | Out-Null
+if ($wpid -eq 0) { Write-Output 'NONE'; exit 0 }
+$proc = Get-Process -Id $wpid -ErrorAction SilentlyContinue
+if (-not $proc) { Write-Output 'NONE'; exit 0 }
+Write-Output $proc.ProcessName
+`;
+
+  try {
+    const r = await runPs(script);
+    if (!r.ok) return { focused: false, processName: null };
+
+    const procName = r.stdout.trim().toLowerCase();
+    if (!procName || procName === 'none') return { focused: false, processName: null };
+
+    const focused = BROWSER_PROCESS_NAMES.has(procName);
+    return { focused, processName: procName };
+  } catch {
     return { focused: false, processName: null };
   }
 }
@@ -408,5 +463,6 @@ module.exports = {
   switchWindow,
   listActiveWindows,
   isBrowserFocused,
+  restoreWindowAndCheckBrowser,
   captureForegroundWindow,
 };
