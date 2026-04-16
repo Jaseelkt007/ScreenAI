@@ -374,6 +374,32 @@ Write-Output $proc.ProcessName
   }
 }
 
+/**
+ * Capture the current foreground window handle as a decimal string.
+ * Returns null on any error or if no foreground window exists.
+ *
+ * @returns {Promise<string|null>}
+ */
+async function captureForegroundWindow() {
+  const script = `
+${WIN32_TYPE_DEF}
+$hwnd = [JarvisWin32]::GetForegroundWindow()
+if ($hwnd -eq [IntPtr]::Zero) { Write-Output 'NONE'; exit 0 }
+Write-Output $hwnd.ToInt64()
+`;
+
+  try {
+    const r = await runPs(script);
+    if (!r.ok) return null;
+
+    const handle = (r.stdout || '').trim();
+    if (!handle || handle === 'NONE' || !/^-?\d+$/.test(handle)) return null;
+    return handle;
+  } catch {
+    return null;
+  }
+}
+
 module.exports = {
   closeApp,
   focusApp,
@@ -382,4 +408,5 @@ module.exports = {
   switchWindow,
   listActiveWindows,
   isBrowserFocused,
+  captureForegroundWindow,
 };

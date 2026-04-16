@@ -19,8 +19,22 @@
  */
 
 const { execFile } = require('child_process');
+const { consumePendingTypeTargetWindowHandle } = require('../typing-target');
 
 const PS_TIMEOUT_MS = 5000;
+
+const FOCUS_WIN32_TYPE_DEF = `
+if (-not ([System.Management.Automation.PSTypeName]'JarvisKeyboardWin32').Type) {
+  Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class JarvisKeyboardWin32 {
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+}
+"@
+}
+`;
 
 // ─── Key maps ─────────────────────────────────────────────────────────────────
 
@@ -157,6 +171,22 @@ function psSingleQuoteEscape(s) {
   return s.replace(/'/g, "''");
 }
 
+function buildFocusRestoreScript(windowHandle) {
+  if (!windowHandle) return '';
+
+  const handle = psSingleQuoteEscape(windowHandle);
+  return `
+${FOCUS_WIN32_TYPE_DEF}
+$targetHwndValue = [Int64]::Parse('${handle}')
+$targetHwnd = [IntPtr]::new($targetHwndValue)
+if ($targetHwnd -eq [IntPtr]::Zero) { Write-Output 'FOCUS_FAILED'; exit 0 }
+[JarvisKeyboardWin32]::SetForegroundWindow($targetHwnd) | Out-Null
+Start-Sleep -Milliseconds 150
+$currentHwnd = [JarvisKeyboardWin32]::GetForegroundWindow()
+if ($currentHwnd -ne $targetHwnd) { Write-Output 'FOCUS_FAILED'; exit 0 }
+`;
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -188,8 +218,10 @@ async function typeText(text) {
 
   // WScript-escape, then PS single-quote-escape
   const escaped = psSingleQuoteEscape(wscriptEscape(sanitized));
+  const targetWindowHandle = consumePendingTypeTargetWindowHandle();
 
   const script = `
+${buildFocusRestoreScript(targetWindowHandle)}
 $shell = New-Object -ComObject WScript.Shell
 $shell.SendKeys('${escaped}')
 Write-Output 'OK'
@@ -198,6 +230,9 @@ Write-Output 'OK'
   const r = await runPs(script);
   if (!r.ok && !r.stdout) {
     return { ok: false, error: `PowerShell error: ${r.stderr.trim()}`, action: '' };
+  }
+  if (r.stdout.trim() === 'FOCUS_FAILED') {
+    return { ok: false, error: 'Could not restore focus to the previous window before typing.', action: '' };
   }
   const preview = sanitized.length > 40
     ? sanitized.slice(0, 40) + '…'

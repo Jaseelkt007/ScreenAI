@@ -884,6 +884,11 @@ async function runM22DispatcherTests() {
 
   // ── keyboard.js pure-logic tests (no PowerShell) ──
   const { typeText, pressKey, pressShortcut, comboToWScript, NAMED_SHORTCUTS, KEY_MAP } = require('./tools/keyboard');
+  const {
+    setPendingTypeTargetWindowHandle,
+    consumePendingTypeTargetWindowHandle,
+    clearPendingTypeTargetWindowHandle,
+  } = require('./typing-target');
 
   await test('comboToWScript("ctrl+c") → "^c"', () => {
     assert.equal(comboToWScript('ctrl+c'), '^c');
@@ -917,6 +922,19 @@ async function runM22DispatcherTests() {
     assert.equal(NAMED_SHORTCUTS['undo'], 'ctrl+z');
     assert.equal(NAMED_SHORTCUTS['save as'], 'ctrl+shift+s');
     assert.equal(NAMED_SHORTCUTS['save'], 'ctrl+s');
+  });
+
+  await test('typing-target stores a numeric window handle and consumes it once', () => {
+    clearPendingTypeTargetWindowHandle();
+    setPendingTypeTargetWindowHandle('123456');
+    assert.equal(consumePendingTypeTargetWindowHandle(), '123456');
+    assert.equal(consumePendingTypeTargetWindowHandle(), null);
+  });
+
+  await test('typing-target rejects invalid window handles', () => {
+    clearPendingTypeTargetWindowHandle();
+    setPendingTypeTargetWindowHandle('not-a-handle');
+    assert.equal(consumePendingTypeTargetWindowHandle(), null);
   });
 
   // typeText input validation (no PS call needed — fails before PS)

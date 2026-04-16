@@ -24,7 +24,12 @@ const {
 
 const path     = require('path');
 const settings = require('../settings');
+const { captureForegroundWindow } = require('./tools/windows');
 const { runPipelineFromText, runPipelineFromAudio } = require('./pipeline');
+const {
+  setPendingTypeTargetWindowHandle,
+  clearPendingTypeTargetWindowHandle,
+} = require('./typing-target');
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
@@ -34,6 +39,7 @@ let _pendingStart    = false;   // queued start-recording for cold-start
 
 let _pipelineRunning = false;
 let _isRecording     = false;   // M3: tracks whether HUD is currently recording
+let _hotkeyStarting  = false;   // guards the async "show HUD + begin recording" path
 
 // One-shot confirm resolve/reject
 let _confirmResolve = null;
@@ -87,6 +93,9 @@ function onHotkeyFired() {
   // ── While pipeline is executing: ignore ──────────────────────────────────
   if (_pipelineRunning) return;
 
+  // ── While first-press startup is still restoring state: ignore ───────────
+  if (_hotkeyStarting) return;
+
   // ── While recording: second press = stop recording ───────────────────────
   if (_isRecording) {
     _isRecording = false;
@@ -101,19 +110,30 @@ function onHotkeyFired() {
   }
 
   // ── First press: show HUD + start recording ───────────────────────────────
+  void startRecordingFromHotkey();
+}
+
+async function startRecordingFromHotkey() {
+  _hotkeyStarting = true;
   _isRecording = true;
 
-  if (!_hudWindow || _hudWindow.isDestroyed()) {
-    createHudWindow();
-  }
+  try {
+    await rememberTypeTargetWindow();
 
-  showHud();
+    if (!_hudWindow || _hudWindow.isDestroyed()) {
+      createHudWindow();
+    }
 
-  if (_hudReady) {
-    hudSend('jarvis:start-recording', {});
-  } else {
-    // Window not yet loaded — send after did-finish-load
-    _pendingStart = true;
+    showHud();
+
+    if (_hudReady) {
+      hudSend('jarvis:start-recording', {});
+    } else {
+      // Window not yet loaded — send after did-finish-load
+      _pendingStart = true;
+    }
+  } finally {
+    _hotkeyStarting = false;
   }
 }
 
@@ -167,6 +187,8 @@ function createHudWindow() {
     _hudReady     = false;
     _isRecording  = false;
     _pendingStart = false;
+    _hotkeyStarting = false;
+    clearPendingTypeTargetWindowHandle();
   });
 
   if (process.platform === 'darwin') {
@@ -176,19 +198,38 @@ function createHudWindow() {
 
 function showHud() {
   if (!_hudWindow || _hudWindow.isDestroyed()) createHudWindow();
-  _hudWindow.show();
-  _hudWindow.focus();
+  try {
+    if (typeof _hudWindow.showInactive === 'function') {
+      _hudWindow.showInactive();
+    } else {
+      _hudWindow.show();
+    }
+  } catch {
+    _hudWindow.show();
+  }
 }
 
 function hideHud() {
   if (_hudWindow && !_hudWindow.isDestroyed() && _hudWindow.isVisible()) {
     _hudWindow.hide();
   }
+  clearPendingTypeTargetWindowHandle();
 }
 
 function hudSend(channel, payload) {
   if (!_hudWindow || _hudWindow.isDestroyed() || _hudWindow.webContents.isDestroyed()) return;
   _hudWindow.webContents.send(channel, payload);
+}
+
+async function rememberTypeTargetWindow() {
+  clearPendingTypeTargetWindowHandle();
+
+  if (process.platform !== 'win32') return;
+
+  const hwnd = await captureForegroundWindow();
+  if (hwnd) {
+    setPendingTypeTargetWindowHandle(hwnd);
+  }
 }
 
 // ─── waitForConfirm — one-shot promise ───────────────────────────────────────
@@ -232,6 +273,7 @@ function registerIpcHandlers() {
       await runPipelineFromAudio(audioBuffer, mimeType, hudSend, waitForConfirm);
     } finally {
       _pipelineRunning = false;
+      clearPendingTypeTargetWindowHandle();
     }
 
     // Auto-hide after result auto-dismiss in renderer (3–5s); add small buffer
@@ -252,6 +294,7 @@ function registerIpcHandlers() {
       await runPipelineFromText(text.trim(), hudSend, waitForConfirm);
     } finally {
       _pipelineRunning = false;
+      clearPendingTypeTargetWindowHandle();
     }
 
     setTimeout(() => { if (!_pipelineRunning) hideHud(); }, 4500);
