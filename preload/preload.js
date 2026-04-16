@@ -51,6 +51,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sendExpand: () =>
     ipcRenderer.send('overlay:expand'),
 
+  sendResize: (height) =>
+    ipcRenderer.send('overlay:resize', { height }),
+
   // ── Settings window ───────────────────────────────────────────────────
 
   /** Load current settings. Returns a Promise<settings object>. */

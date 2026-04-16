@@ -14,13 +14,14 @@ const closeBtn          = document.getElementById('close-btn');
 const retakeBtn         = document.getElementById('retake-btn');
 const chatMessages      = document.getElementById('chat-messages');
 const placeholderEl     = document.getElementById('placeholder');
-const inputFooter       = document.getElementById('input-footer');
-const phaseBadge        = document.getElementById('phase-badge');
-const conversationLabel = document.getElementById('conversation-label');
-const conversationMeta  = document.getElementById('conversation-meta');
-const inputMeta         = document.getElementById('input-meta');
-const captureChip       = document.getElementById('capture-chip');
-const turnCounter       = document.getElementById('turn-counter');
+const f7ComposerEl      = document.getElementById('f7-composer');
+const inputFooter       = document.getElementById('input-footer');   // legacy (hidden)
+const phaseBadge        = document.getElementById('phase-badge');    // legacy (hidden)
+const conversationLabel = document.getElementById('conversation-label'); // legacy
+const conversationMeta  = document.getElementById('conversation-meta'); // legacy
+const inputMeta         = document.getElementById('input-meta');     // legacy
+const captureChip       = document.getElementById('capture-chip');   // legacy
+const turnCounter       = document.getElementById('turn-counter');   // legacy
 const turnsUsedEl       = document.getElementById('turns-used');
 const turnsMaxEl        = document.getElementById('turns-max');
 const sendBtnLabel      = sendBtn.querySelector('.btn-text');
@@ -127,6 +128,19 @@ window.electronAPI.onOverlayDone(() => {
     setOverlayState('done', `Turn ${turnCount} of ${MAX_TURNS} complete`);
     setInputEnabled(true);
   }
+
+  // Content-aware resize: measure the chat area and ask main to grow/shrink
+  // the window height to fit the answer (within safe limits).
+  if (hudEl.dataset.mode === 'expanded' && window.electronAPI.sendResize) {
+    requestAnimationFrame(() => {
+      const topbarH   = (document.getElementById('f7-topbar')   || {}).offsetHeight || 46;
+      const composerH = (f7ComposerEl || {}).offsetHeight || 62;
+      const msgH      = chatMessages.scrollHeight;
+      const padding   = 24;
+      const desired   = Math.min(620, Math.max(280, msgH + topbarH + composerH + padding));
+      window.electronAPI.sendResize(desired);
+    });
+  }
 });
 
 window.electronAPI.onOverlayError(({ message }) => {
@@ -186,14 +200,18 @@ function submitCompact() {
   // Transfer text to the main textarea used by submitQuestion()
   questionInput.value = text;
 
-  // Ask main process to resize the window to the full overlay size
+  // Expand the window immediately (instant on Windows, animated on macOS)
   window.electronAPI.sendExpand();
 
-  // Switch the HUD to expanded mode (shows full UI, hides pill)
-  hudEl.dataset.mode = 'expanded';
+  // Kick off the pill fade-out animation (data-mode="expanding")
+  hudEl.dataset.mode = 'expanding';
 
-  // Run the existing question submit which handles LLM + UI updates
-  submitQuestion();
+  // After the pill finishes fading out (240ms animation), switch to the
+  // full chat UI which fades in via its own animation, then submit.
+  setTimeout(() => {
+    hudEl.dataset.mode = 'expanded';
+    submitQuestion();
+  }, 260);
 }
 
 compactSend.addEventListener('click', submitCompact);
@@ -359,7 +377,13 @@ function updateTurnCounter(completedTurns) {
 }
 
 function showContextLimit() {
-  inputFooter.classList.add('hidden');
+  // In the F7 expanded panel hide the f7-composer; fall back to the legacy
+  // input-footer stub if somehow the panel isn't in use.
+  if (f7ComposerEl) {
+    f7ComposerEl.classList.add('hidden');
+  } else {
+    inputFooter.classList.add('hidden');
+  }
 
   const existing = document.getElementById('context-limit');
   if (existing) return;
@@ -386,7 +410,14 @@ function setInputEnabled(enabled) {
   isLoading = !enabled;
   sendBtn.disabled = !enabled;
   questionInput.disabled = !enabled;
-  sendBtnLabel.textContent = enabled ? 'ANALYZE' : 'LIVE';
+
+  // In the F7 expanded panel the send button is a small glass circle —
+  // keep the arrow glyph rather than the legacy ANALYZE/LIVE labels.
+  if (hudEl.dataset.mode === 'expanded') {
+    sendBtnLabel.textContent = '↑';
+  } else {
+    sendBtnLabel.textContent = enabled ? 'ANALYZE' : 'LIVE';
+  }
 
   if (enabled) {
     questionInput.focus();

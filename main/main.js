@@ -529,13 +529,15 @@ ipcMain.on('capture:cancel', closeAll);
 function openOverlayWindow(logicalRegion) {
   const { workAreaSize } = screen.getPrimaryDisplay();
   const GAP = 12;
-  const maxW = Math.max(420, workAreaSize.width - GAP * 2);
-  const maxH = Math.max(420, workAreaSize.height - GAP * 2);
-  const W = Math.min(maxW, Math.max(820, Math.round(workAreaSize.width * 0.58)));
-  const H = Math.min(maxH, Math.max(560, Math.round(workAreaSize.height * 0.72)));
+  const maxW = Math.max(360, workAreaSize.width - GAP * 2);
+  const maxH = Math.max(280, workAreaSize.height - GAP * 2);
+  // F7 expanded panel: moderate floating size, not the old full Jarvis layout
+  const W = Math.min(maxW, Math.max(500, Math.round(workAreaSize.width * 0.38)));
+  const H = Math.min(maxH, Math.max(340, Math.round(workAreaSize.height * 0.50)));
 
-  let fullX = logicalRegion.x + logicalRegion.width + GAP;
-  let fullY = logicalRegion.y;
+  // Centre the expanded panel on screen for a cleaner floating feel
+  let fullX = Math.round((workAreaSize.width  - W) / 2);
+  let fullY = Math.round((workAreaSize.height - H) / 2);
   if (fullX + W > workAreaSize.width)  fullX = logicalRegion.x - W - GAP;
   if (fullX < 0)                       fullX = GAP;
   if (fullY + H > workAreaSize.height) fullY = workAreaSize.height - H - GAP;
@@ -544,9 +546,9 @@ function openOverlayWindow(logicalRegion) {
   // Store the full expanded bounds for when user submits the compact input
   _overlayExpandBounds = { x: fullX, y: fullY, width: W, height: H };
 
-  // Start as a compact pill (560×90) centred horizontally
-  const PILL_W = 560;
-  const PILL_H = 90;
+  // Start as a compact pill (430×62) centred horizontally
+  const PILL_W = 430;
+  const PILL_H = 62;
   const x = Math.max(GAP, Math.round((workAreaSize.width  - PILL_W) / 2));
   const y = Math.max(GAP, Math.min(
     workAreaSize.height - PILL_H - GAP,
@@ -557,6 +559,7 @@ function openOverlayWindow(logicalRegion) {
     x, y, width: PILL_W, height: PILL_H,
     transparent: true, frame: false, alwaysOnTop: true,
     skipTaskbar: true, resizable: false, hasShadow: false,
+    backgroundColor: '#00000000',
     icon: APP_ICON,
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
@@ -609,6 +612,20 @@ ipcMain.on('overlay:expand', () => {
   const { x, y, width, height } = _overlayExpandBounds;
   overlayWindow.setResizable(true);
   overlayWindow.setBounds({ x, y, width, height }, true);
+});
+
+// Content-aware resize: renderer sends the desired height after an answer
+// streams in.  We keep width and recentre Y within the work area.
+ipcMain.on('overlay:resize', (_event, { height }) => {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return;
+  const { workAreaSize } = screen.getPrimaryDisplay();
+  const newH   = Math.min(640, Math.max(280, Math.round(height)));
+  const bounds = overlayWindow.getBounds();
+  const newY   = Math.max(
+    12,
+    Math.min(bounds.y, workAreaSize.height - newH - 12),
+  );
+  overlayWindow.setBounds({ x: bounds.x, y: newY, width: bounds.width, height: newH }, true);
 });
 
 // ─── Voice Guide flow ─────────────────────────────────────────────────────

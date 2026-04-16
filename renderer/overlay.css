@@ -1157,68 +1157,92 @@ kbd {
 
 /* ── Compact liquid-glass pill mode ────────────────────────────────────── */
 
-/* In compact mode the window is 560×90 — hide the full Jarvis UI,
-   expose only the glass pill centred inside the transparent window. */
-#hud[data-mode="compact"] {
+/*
+ * All three overlay modes (compact / expanding / expanded) make the root #hud
+ * transparent.  Each mode has its own visual surface:
+ *   compact / expanding → the compact-bar pill
+ *   expanded            → #f7-panel (the chat panel)
+ *
+ * Drag in compact mode is placed on #hud so the entire small window (including
+ * the transparent padding around the pill) acts as a drag handle.  Interactive
+ * children override with -webkit-app-region: no-drag.
+ */
+#hud[data-mode="compact"],
+#hud[data-mode="expanding"],
+#hud[data-mode="expanded"] {
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  padding: 9px 20px !important;
+}
+
+#hud[data-mode="compact"],
+#hud[data-mode="expanding"] {
+  padding: 6px 14px !important;
   gap: 0 !important;
   align-items: center;
   justify-content: center;
   overflow: visible;
+  /* Whole compact window is a drag target; input/send override to no-drag */
+  -webkit-app-region: drag;
 }
 
-#hud[data-mode="compact"] #bg-field,
-#hud[data-mode="compact"] #header,
-#hud[data-mode="compact"] #layout {
-  display: none !important;
+#hud[data-mode="expanded"] {
+  padding: 0 !important;
+  gap: 0 !important;
+  overflow: hidden;
 }
 
-/* Pill hidden by default; shown only in compact mode */
+/* Pill hidden by default; shown only in compact / expanding modes */
 #compact-bar {
   display: none;
 }
 
-#hud[data-mode="compact"] #compact-bar {
+#hud[data-mode="compact"] #compact-bar,
+#hud[data-mode="expanding"] #compact-bar {
   display: flex;
   position: relative;
   align-items: center;
   width: 100%;
-  height: 72px;
+  height: 50px;
   border-radius: 50px;
   background: linear-gradient(130deg, rgba(108,140,255,0.42) 0%, rgba(148,108,255,0.38) 100%);
   backdrop-filter: blur(44px) saturate(1.9) brightness(1.08);
   -webkit-backdrop-filter: blur(44px) saturate(1.9) brightness(1.08);
   border: 1px solid rgba(255,255,255,0.28);
   box-shadow:
-    0 24px 64px rgba(100,80,255,0.36),
-    0 10px 28px rgba(108,140,255,0.24),
-    0 4px 10px rgba(80,80,200,0.18),
+    0 18px 52px rgba(100,80,255,0.34),
+    0 8px 22px rgba(108,140,255,0.22),
+    0 3px 8px rgba(80,80,200,0.16),
     inset 0 1.5px 0 rgba(255,255,255,0.40),
     inset 0 -1px 0 rgba(255,255,255,0.06);
-  padding: 0 14px 0 20px;
+  padding: 0 10px 0 16px;
   gap: 0;
-  -webkit-app-region: drag;
   overflow: hidden;
+  /* clip-path enforces true pill clipping for backdrop-filter on Windows */
+  clip-path: inset(0px round 50px);
+}
+
+/* Expanded state: pill is hidden */
+#hud[data-mode="expanded"] #compact-bar {
+  display: none !important;
 }
 
 /* Ambient bloom behind the pill */
-#hud[data-mode="compact"] #compact-bar::after {
+#hud[data-mode="compact"] #compact-bar::after,
+#hud[data-mode="expanding"] #compact-bar::after {
   content: '';
   position: absolute;
-  inset: -20px -30px;
+  inset: -18px -26px;
   border-radius: 80px;
   background: radial-gradient(ellipse at 42% 62%,
-    rgba(108,140,255,0.26) 0%,
-    rgba(148,108,255,0.14) 55%,
+    rgba(108,140,255,0.24) 0%,
+    rgba(148,108,255,0.12) 55%,
     transparent 80%
   );
-  filter: blur(22px);
-  opacity: 0.7;
+  filter: blur(18px);
+  opacity: 0.65;
   z-index: -1;
   pointer-events: none;
 }
@@ -1228,7 +1252,7 @@ kbd {
   position: absolute;
   top: 0;
   left: 8%;
-  width: 62%;
+  width: 60%;
   height: 1.5px;
   border-radius: 999px;
   background: linear-gradient(90deg,
@@ -1248,8 +1272,8 @@ kbd {
   position: absolute;
   top: 1px;
   left: 12%;
-  width: 46%;
-  height: 10px;
+  width: 44%;
+  height: 8px;
   border-radius: 999px;
   background: radial-gradient(ellipse at 50% 0%,
     rgba(255,255,255,0.22) 0%,
@@ -1266,11 +1290,12 @@ kbd {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 44px;
+  width: 34px;
   color: rgba(255,255,255,0.72);
   filter: drop-shadow(0 0 4px rgba(200,180,255,0.5));
   pointer-events: none;
-  -webkit-app-region: no-drag;
+  /* pointer-events:none means this zone acts as a draggable handle —
+     drag comes from #hud in compact mode. */
 }
 
 #compact-input {
@@ -1281,9 +1306,9 @@ kbd {
   border: none;
   outline: none;
   font-family: var(--font-ui);
-  font-size: 15.5px;
+  font-size: 14px;
   font-weight: 400;
-  letter-spacing: 0.022em;
+  letter-spacing: 0.016em;
   color: rgba(255,255,255,0.94);
   caret-color: rgba(190,168,255,0.95);
   -webkit-app-region: no-drag;
@@ -1292,7 +1317,7 @@ kbd {
 }
 
 #compact-input::placeholder {
-  color: rgba(255,255,255,0.50);
+  color: rgba(255,255,255,0.48);
 }
 
 #compact-input:disabled {
@@ -1303,16 +1328,16 @@ kbd {
 #compact-send {
   position: relative;
   flex-shrink: 0;
-  width: 46px;
-  height: 46px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
   background: linear-gradient(140deg, rgba(108,145,255,0.84) 0%, rgba(148,100,255,0.80) 100%);
   border: 1px solid rgba(255,255,255,0.28);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   box-shadow:
-    0 6px 20px rgba(108,100,255,0.52),
-    0 2px 8px rgba(138,108,255,0.40),
+    0 5px 16px rgba(108,100,255,0.50),
+    0 2px 6px rgba(138,108,255,0.38),
     inset 0 1px 0 rgba(255,255,255,0.34);
   color: rgba(255,255,255,0.95);
   display: flex;
@@ -1339,13 +1364,337 @@ kbd {
 
 #compact-send:hover {
   box-shadow:
-    0 8px 26px rgba(108,100,255,0.62),
-    0 3px 10px rgba(138,108,255,0.50),
+    0 7px 22px rgba(108,100,255,0.60),
+    0 3px 9px rgba(138,108,255,0.48),
     inset 0 1px 0 rgba(255,255,255,0.34);
 }
 
 #compact-send:active {
-  transform: scale(0.93);
+  transform: scale(0.91);
+}
+
+/* Expanding: pill fades out while window grows */
+#hud[data-mode="expanding"] #compact-bar {
+  animation: pillFadeOut 0.24s cubic-bezier(0.4, 0, 1, 1) forwards;
+  pointer-events: none;
+}
+
+/* ── F7 Expanded Chat Panel ──────────────────────────────────────────────── */
+
+/* Panel hidden by default; only shown in expanded mode */
+#f7-panel {
+  display: none;
+}
+
+#hud[data-mode="expanded"] #f7-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  border-radius: 20px;
+  /* Blue-purple liquid glass — visually continuous with the compact pill */
+  background: linear-gradient(158deg,
+    rgba(16,12,34,0.93) 0%,
+    rgba(10,8,26,0.90) 100%
+  );
+  backdrop-filter: blur(44px) saturate(1.7) brightness(1.05);
+  -webkit-backdrop-filter: blur(44px) saturate(1.7) brightness(1.05);
+  border: 1px solid rgba(255,255,255,0.11);
+  box-shadow:
+    0 28px 72px rgba(40,20,180,0.38),
+    0 12px 32px rgba(100,60,240,0.20),
+    inset 0 1px 0 rgba(255,255,255,0.12),
+    inset 0 -1px 0 rgba(100,80,255,0.06);
+  overflow: hidden;
+  /* clip-path clips backdrop-filter to the panel shape on Windows */
+  clip-path: inset(0px round 20px);
+  animation: f7PanelIn 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: bottom center;
+}
+
+/* Top glass glint — echoes the pill's cbar-shine */
+#hud[data-mode="expanded"] #f7-panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 10%;
+  width: 80%;
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent,
+    rgba(200,180,255,0.30),
+    transparent
+  );
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Ambient colour bloom inside the panel */
+#hud[data-mode="expanded"] #f7-panel::after {
+  content: '';
+  position: absolute;
+  top: -20%;
+  left: 25%;
+  width: 50%;
+  height: 35%;
+  background: radial-gradient(ellipse,
+    rgba(100,80,240,0.16) 0%,
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── F7 Top Bar ──────────────────────────────────────────────────────────── */
+
+#f7-topbar {
+  display: none;
+}
+
+#hud[data-mode="expanded"] #f7-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 10px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+  -webkit-app-region: drag;
+}
+
+#f7-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(190,168,255,0.86);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+#f7-thumb-frame {
+  flex: 1;
+  min-width: 0;
+  max-width: 72px;
+  height: 28px;
+  border-radius: 5px;
+  border: 1px solid rgba(255,255,255,0.09);
+  background: rgba(0,0,0,0.22);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  -webkit-app-region: no-drag;
+  cursor: default;
+  flex-shrink: 0;
+}
+
+#f7-thumb-frame #screenshot-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+#f7-topbar #close-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  border: 1px solid rgba(255,255,255,0.07);
+  background: rgba(255,255,255,0.02);
+  color: rgba(180,155,255,0.48);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.14s, background 0.14s, border-color 0.14s;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+#f7-topbar #close-btn:hover {
+  color: rgba(255,80,80,0.92);
+  background: rgba(255,40,40,0.08);
+  border-color: rgba(255,60,60,0.2);
+}
+
+/* ── F7 Chat Messages ────────────────────────────────────────────────────── */
+
+#hud[data-mode="expanded"] #chat-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(130,100,255,0.24) transparent;
+  -webkit-app-region: no-drag;
+  user-select: text;
+  -webkit-user-select: text;
+  position: relative;
+  z-index: 2;
+}
+
+#hud[data-mode="expanded"] #chat-messages::-webkit-scrollbar {
+  width: 3px;
+}
+
+#hud[data-mode="expanded"] #chat-messages::-webkit-scrollbar-thumb {
+  background: rgba(130,100,255,0.30);
+  border-radius: 999px;
+}
+
+/* Placeholder styled for the new glass panel */
+#hud[data-mode="expanded"] #placeholder {
+  border-color: rgba(130,100,255,0.13);
+  background: rgba(100,80,255,0.04);
+  padding: 22px 16px;
+}
+
+#hud[data-mode="expanded"] #placeholder-mark {
+  color: rgba(175,148,255,0.50);
+}
+
+#hud[data-mode="expanded"] .placeholder-title {
+  font-size: 13px;
+  color: rgba(200,180,255,0.84);
+}
+
+#hud[data-mode="expanded"] .placeholder-hint {
+  color: rgba(145,115,255,0.58);
+  font-size: 11px;
+}
+
+/* Override AI / user message accent colours to match purple tint */
+#hud[data-mode="expanded"] .message.ai {
+  border-color: rgba(140,110,255,0.16);
+}
+
+#hud[data-mode="expanded"] .message.ai::after {
+  background: linear-gradient(to right, transparent, rgba(140,110,255,0.26), transparent);
+}
+
+#hud[data-mode="expanded"] .message.user {
+  border-color: rgba(160,130,255,0.18);
+}
+
+#hud[data-mode="expanded"] .thinking-dots span {
+  background: rgba(160,130,255,0.84);
+}
+
+/* ── F7 Composer ─────────────────────────────────────────────────────────── */
+
+#f7-composer {
+  display: none;
+}
+
+#hud[data-mode="expanded"] #f7-composer {
+  display: block;
+  flex-shrink: 0;
+  padding: 10px 12px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  -webkit-app-region: no-drag;
+  position: relative;
+  z-index: 2;
+}
+
+#hud[data-mode="expanded"] #f7-composer.hidden {
+  display: none;
+}
+
+#f7-input-pill {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 7px 8px 7px 13px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.055);
+  border: 1px solid rgba(255,255,255,0.09);
+  transition: border-color 0.18s, background 0.18s;
+}
+
+#f7-input-pill:focus-within {
+  border-color: rgba(160,120,255,0.26);
+  background: rgba(255,255,255,0.075);
+}
+
+#hud[data-mode="expanded"] #question-input {
+  flex: 1;
+  min-height: 20px;
+  max-height: 96px;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  font-weight: 400;
+  line-height: 1.52;
+  color: rgba(228,215,255,0.94);
+  caret-color: rgba(195,168,255,0.92);
+  resize: none;
+  overflow-y: auto;
+  user-select: text;
+  -webkit-user-select: text;
+  padding: 2px 0;
+}
+
+#hud[data-mode="expanded"] #question-input::placeholder {
+  color: rgba(175,148,255,0.38);
+}
+
+#hud[data-mode="expanded"] #question-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#hud[data-mode="expanded"] #send-btn {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border-radius: 50%;
+  background: linear-gradient(140deg, rgba(108,80,255,0.88), rgba(150,90,255,0.84));
+  border: 1px solid rgba(255,255,255,0.24);
+  color: rgba(255,255,255,0.96);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  box-shadow:
+    0 4px 14px rgba(100,60,255,0.44),
+    inset 0 1px 0 rgba(255,255,255,0.28);
+  transition: transform 0.12s, box-shadow 0.15s;
+}
+
+#hud[data-mode="expanded"] #send-btn:hover {
+  box-shadow:
+    0 6px 18px rgba(120,70,255,0.56),
+    inset 0 1px 0 rgba(255,255,255,0.28);
+}
+
+#hud[data-mode="expanded"] #send-btn:active {
+  transform: scale(0.90);
+}
+
+#hud[data-mode="expanded"] #send-btn:disabled {
+  opacity: 0.40;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+#hud[data-mode="expanded"] #send-btn .btn-text {
+  font-size: 15px;
+  line-height: 1;
+  font-family: var(--font-ui);
 }
 
 /* ── Utilities ─────────────────────────────────────────────────────────── */
@@ -1440,5 +1789,28 @@ kbd {
   }
   50% {
     opacity: 1;
+  }
+}
+
+@keyframes pillFadeOut {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.93);
+  }
+}
+
+/* F7 panel expands upward from where the pill was */
+@keyframes f7PanelIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
