@@ -21,12 +21,26 @@ const path = require('path');
  * @returns {Promise<VerifierResult>}
  */
 async function verify(classifierResult, toolResult) {
+  const { intent } = classifierResult;
+
+  // system.brightness has a known graceful-degradation path where ok=false is
+  // expected on desktop hardware. Handle it before the generic failure guard.
+  if (intent === 'system.brightness' && !toolResult.ok) {
+    if (toolResult.error && toolResult.error.includes('not available')) {
+      return {
+        verified: false,
+        method:   'brightness_unsupported',
+        detail:   toolResult.error,
+      };
+    }
+    return { verified: false, method: 'skipped', detail: 'Tool reported failure' };
+  }
+
   if (!toolResult.ok) {
     // Nothing to verify — tool already reported failure
     return { verified: false, method: 'skipped', detail: 'Tool reported failure' };
   }
 
-  const { intent } = classifierResult;
   const { data }   = toolResult;
 
   try {
@@ -101,9 +115,29 @@ async function verify(classifierResult, toolResult) {
           detail:   'PowerShell command returned success',
         };
 
+      case 'system.volume':
+      case 'system.lock':
+        return {
+          verified: toolResult.ok === true,
+          method:   'spawn_ok',
+          detail:   'system command returned success',
+        };
+
+      case 'system.brightness':
+        // ok=false with 'not available' is handled before this switch (early guard above).
+        // If we reach here, toolResult.ok is true.
+        return {
+          verified: true,
+          method:   'spawn_ok',
+          detail:   data && data.to !== undefined
+            ? `brightness changed to ${data.to}%`
+            : 'brightness command returned success',
+        };
+
       case 'browser.open':
       case 'browser.goto':
       case 'browser.search':
+      case 'browser.site':
         return {
           verified: toolResult.ok === true,
           method:   'open_ok',

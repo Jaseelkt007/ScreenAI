@@ -1308,12 +1308,405 @@ async function runM24SynonymTests() {
   });
 }
 
+// ─── 12. Phase 3 M3.1 — Suite 9: browser.site ───────────────────────────────
+
+async function runM31BrowserSiteTests() {
+  section('12. M3.1 — Suite 9: browser.site classifier & resolveSiteUrl');
+
+  const { resolveSiteUrl, NAMED_SITES } = require('./tools/sites');
+
+  // ── resolveSiteUrl unit tests ──
+  await test('resolveSiteUrl("gmail") → https://mail.google.com', () => {
+    assert.equal(resolveSiteUrl('gmail'), 'https://mail.google.com');
+  });
+
+  await test('resolveSiteUrl("GMAIL") → case-insensitive match', () => {
+    assert.equal(resolveSiteUrl('GMAIL'), 'https://mail.google.com');
+  });
+
+  await test('resolveSiteUrl("YouTube") → https://youtube.com', () => {
+    assert.equal(resolveSiteUrl('YouTube'), 'https://youtube.com');
+  });
+
+  await test('resolveSiteUrl("the youtube website") → normalises to youtube → correct URL', () => {
+    assert.equal(resolveSiteUrl('the youtube website'), 'https://youtube.com');
+  });
+
+  await test('resolveSiteUrl("my drive") → normalises to drive → https://drive.google.com', () => {
+    assert.equal(resolveSiteUrl('my drive'), 'https://drive.google.com');
+  });
+
+  await test('resolveSiteUrl("stack overflow") → https://stackoverflow.com', () => {
+    assert.equal(resolveSiteUrl('stack overflow'), 'https://stackoverflow.com');
+  });
+
+  await test('resolveSiteUrl("google calendar") → https://calendar.google.com', () => {
+    assert.equal(resolveSiteUrl('google calendar'), 'https://calendar.google.com');
+  });
+
+  await test('resolveSiteUrl("unknownxyz") → null', () => {
+    assert.equal(resolveSiteUrl('unknownxyz'), null);
+  });
+
+  await test('resolveSiteUrl(null) → null (graceful)', () => {
+    assert.equal(resolveSiteUrl(null), null);
+  });
+
+  await test('resolveSiteUrl("") → null (graceful)', () => {
+    assert.equal(resolveSiteUrl(''), null);
+  });
+
+  // ── Classifier: browser.site intent detection ──
+  await test('"open Gmail" → browser.site', async () => {
+    const r = await classify('open Gmail', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.site', `Got "${r.intent}"`);
+    assert.equal(r.confidence, 'pattern');
+    assert.ok(r.params.siteName, 'siteName should be set');
+  });
+
+  await test('"go to YouTube" → browser.site, siteName contains youtube', async () => {
+    const r = await classify('go to YouTube', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.site', `Got "${r.intent}"`);
+    assert.ok(r.params.siteName.includes('youtube'), `siteName: "${r.params.siteName}"`);
+  });
+
+  await test('"launch GitHub" → browser.site', async () => {
+    const r = await classify('launch GitHub', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.site', `Got "${r.intent}"`);
+    assert.ok(r.params.siteName.includes('github'), `siteName: "${r.params.siteName}"`);
+  });
+
+  await test('"open Google Calendar" → browser.site', async () => {
+    const r = await classify('open Google Calendar', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.site', `Got "${r.intent}"`);
+    assert.ok(r.params.siteName.includes('google calendar') || r.params.siteName.includes('calendar'), `siteName: "${r.params.siteName}"`);
+  });
+
+  await test('"visit Stack Overflow" → browser.site', async () => {
+    const r = await classify('visit Stack Overflow', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.site', `Got "${r.intent}"`);
+  });
+
+  await test('"open Claude" → browser.site', async () => {
+    const r = await classify('open Claude', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.site', `Got "${r.intent}"`);
+    assert.ok(r.params.siteName.includes('claude'), `siteName: "${r.params.siteName}"`);
+  });
+
+  await test('browser.site needsConfirm: false', async () => {
+    const r = await classify('open Gmail', LLM_NEVER_CALLED);
+    assert.equal(r.needsConfirm, false);
+  });
+
+  // ── Collision tests ──
+  await test('COLLISION: "go to youtube.com" → browser.goto (has .com domain)', async () => {
+    const r = await classify('go to youtube.com', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.goto', `Got "${r.intent}" — .com URLs must hit browser.goto`);
+  });
+
+  await test('COLLISION: "open Chrome" → app.open (Chrome is in APP_NAMES)', async () => {
+    const r = await classify('open Chrome', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'app.open', `Got "${r.intent}" — app.open must fire before browser.site`);
+  });
+
+  await test('COLLISION: "open Firefox" → app.open (not browser.site)', async () => {
+    const r = await classify('open Firefox', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'app.open', `Got "${r.intent}"`);
+  });
+
+  // ── Dispatcher: browser.site routing (stub Electron + sites) ──
+  section('12b. M3.1 — Dispatcher: browser.site routing');
+
+  await test('browser.site missing siteName → DispatchError', async () => {
+    const cr = { intent: 'browser.site', params: {}, needsConfirm: false };
+    try {
+      await dispatch(cr);
+      assert.fail('should have thrown DispatchError');
+    } catch (err) {
+      assert.equal(err.name, 'DispatchError');
+      assert.ok(err.message.includes('site name'), `message: ${err.message}`);
+    }
+  });
+
+  await test('browser.site with unknown site → ok:false, clean error message', async () => {
+    // Patch sites module to return null for unknown site
+    const sites = require('./tools/sites');
+    const orig  = sites.resolveSiteUrl;
+    sites.resolveSiteUrl = () => null;
+    try {
+      const r = await dispatch({ intent: 'browser.site', params: { siteName: 'unknownxyz' }, needsConfirm: false });
+      assert.ok(!r.ok);
+      assert.ok(r.error.includes('unknownxyz'), `error: ${r.error}`);
+    } finally {
+      sites.resolveSiteUrl = orig;
+    }
+  });
+
+  // ── Verifier: browser.site → open_ok ──
+  section('12c. M3.1 — Verifier: browser.site');
+
+  await test('browser.site → open_ok verified:true', async () => {
+    const cr = { intent: 'browser.site' };
+    const tr = { ok: true, data: { url: 'https://mail.google.com', launched: true } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'open_ok');
+    assert.ok(r.verified);
+    assert.ok(r.detail.includes('mail.google.com'));
+  });
+
+  await test('browser.site tool failure → skipped', async () => {
+    const cr = { intent: 'browser.site' };
+    const tr = { ok: false, error: 'shell.openExternal failed' };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'skipped');
+    assert.ok(!r.verified);
+  });
+}
+
+// ─── 13. Phase 3 M3.2 — Suite 10: system.volume / system.brightness / system.lock ──
+
+async function runM32SystemTests() {
+  section('13. M3.2 — Suite 10: system.volume / system.brightness / system.lock');
+
+  // ── system.volume: basic action extraction ──
+  const volumeCases = [
+    { t: 'mute',                         action: 'mute' },
+    { t: 'silence',                      action: 'mute' },
+    { t: 'unmute',                       action: 'unmute' },
+    { t: 'volume up',                    action: 'up' },
+    { t: 'turn the volume down',         action: 'down' },
+    { t: 'louder',                       action: 'up' },
+    { t: 'quieter',                      action: 'down' },
+    { t: 'increase volume',              action: 'up' },
+    { t: 'decrease the volume',          action: 'down' },
+  ];
+
+  for (const { t, action } of volumeCases) {
+    await test(`"${t}" → system.volume, action: ${action}`, async () => {
+      const r = await classify(t, LLM_NEVER_CALLED);
+      assert.equal(r.intent, 'system.volume', `Got "${r.intent}"`);
+      assert.equal(r.confidence, 'pattern');
+      assert.equal(r.params.action, action, `action: got "${r.params.action}"`);
+      assert.equal(r.needsConfirm, false);
+    });
+  }
+
+  // ── system.volume: set level ──
+  await test('"set volume to 50" → system.volume, action: set, level: 50', async () => {
+    const r = await classify('set volume to 50', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.volume', `Got "${r.intent}"`);
+    assert.equal(r.params.action, 'set', `action: "${r.params.action}"`);
+    assert.equal(r.params.level, 50, `level: ${r.params.level}`);
+  });
+
+  await test('"set volume to 70" → system.volume, action: set, level: 70', async () => {
+    const r = await classify('set volume to 70', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.volume');
+    assert.equal(r.params.action, 'set');
+    assert.equal(r.params.level, 70);
+  });
+
+  await test('"set the volume to 100" → system.volume, action: set, level: 100', async () => {
+    const r = await classify('set the volume to 100', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.volume', `Got "${r.intent}"`);
+    assert.equal(r.params.action, 'set');
+    assert.equal(r.params.level, 100);
+  });
+
+  await test('"set volume to seventy" → system.volume, action: set, level: 70', async () => {
+    const r = await classify('set volume to seventy', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.volume', `Got "${r.intent}"`);
+    assert.equal(r.params.action, 'set');
+    assert.equal(r.params.level, 70);
+  });
+
+  await test('"set the volume to max" → system.volume, action: set, level: 100', async () => {
+    const r = await classify('set the volume to max', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.volume', `Got "${r.intent}"`);
+    assert.equal(r.params.action, 'set');
+    assert.equal(r.params.level, 100);
+  });
+
+  // ── system.brightness ──
+  const brightnessCases = [
+    { t: 'brightness up',        action: 'up' },
+    { t: 'brightness down',      action: 'down' },
+    { t: 'increase brightness',  action: 'up' },
+    { t: 'decrease brightness',  action: 'down' },
+    { t: 'dim the screen',       action: 'down' },
+    { t: 'brighten the display', action: 'up' },
+  ];
+
+  for (const { t, action } of brightnessCases) {
+    await test(`"${t}" → system.brightness, action: ${action}`, async () => {
+      const r = await classify(t, LLM_NEVER_CALLED);
+      assert.equal(r.intent, 'system.brightness', `Got "${r.intent}"`);
+      assert.equal(r.params.action, action, `action: got "${r.params.action}"`);
+      assert.equal(r.needsConfirm, false);
+    });
+  }
+
+  // ── system.lock ──
+  await test('"lock the screen" → system.lock, needsConfirm: true', async () => {
+    const r = await classify('lock the screen', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.lock', `Got "${r.intent}"`);
+    assert.equal(r.needsConfirm, true, 'system.lock must always needsConfirm');
+    assert.deepEqual(r.params, {});
+  });
+
+  await test('"lock my computer" → system.lock, needsConfirm: true', async () => {
+    const r = await classify('lock my computer', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.lock', `Got "${r.intent}"`);
+    assert.equal(r.needsConfirm, true);
+  });
+
+  await test('"lock" → system.lock', async () => {
+    const r = await classify('lock', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.lock', `Got "${r.intent}"`);
+    assert.equal(r.needsConfirm, true);
+  });
+
+  // ── Collision tests ──
+  await test('COLLISION: "lower volume" does NOT match window.minimize', async () => {
+    const r = await classify('lower volume', LLM_NEVER_CALLED);
+    assert.notEqual(r.intent, 'window.minimize', `Should NOT be window.minimize`);
+    assert.equal(r.intent, 'system.volume', `Got "${r.intent}"`);
+  });
+
+  await test('COLLISION: "mute" does NOT match app.* patterns', async () => {
+    const r = await classify('mute', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.volume', `Got "${r.intent}"`);
+  });
+
+  // ── Dispatcher: system.* routing (Tier A — param validation, no PS calls) ──
+  section('13b. M3.2 — Dispatcher: system.* routing (param validation)');
+
+  await test('system.volume missing action → DispatchError', async () => {
+    const cr = { intent: 'system.volume', params: {}, needsConfirm: false };
+    try {
+      await dispatch(cr);
+      assert.fail('should have thrown DispatchError');
+    } catch (err) {
+      assert.equal(err.name, 'DispatchError');
+    }
+  });
+
+  await test('system.volume invalid action → DispatchError', async () => {
+    const cr = { intent: 'system.volume', params: { action: 'explode' }, needsConfirm: false };
+    try {
+      await dispatch(cr);
+      assert.fail('should have thrown DispatchError');
+    } catch (err) {
+      assert.equal(err.name, 'DispatchError');
+    }
+  });
+
+  await test('system.volume set action without level → DispatchError', async () => {
+    const cr = { intent: 'system.volume', params: { action: 'set' }, needsConfirm: false };
+    try {
+      await dispatch(cr);
+      assert.fail('should have thrown DispatchError');
+    } catch (err) {
+      assert.equal(err.name, 'DispatchError');
+    }
+  });
+
+  await test('system.brightness invalid action → DispatchError', async () => {
+    const cr = { intent: 'system.brightness', params: { action: 'strobe' }, needsConfirm: false };
+    try {
+      await dispatch(cr);
+      assert.fail('should have thrown DispatchError');
+    } catch (err) {
+      assert.equal(err.name, 'DispatchError');
+    }
+  });
+
+  // ── Volume level clamping in dispatcher ──
+  await test('system.volume set level=150 → clamped to 100 (no error)', async () => {
+    // Patch system module so we don't actually call PS
+    const system = require('./tools/system');
+    const origSetVolume = system.setVolume;
+    let receivedLevel = null;
+    system.setVolume = async (params) => {
+      receivedLevel = params.level;
+      return { ok: true, data: { action: 'set', level: params.level }, action: `Volume set to ${params.level}%.` };
+    };
+    try {
+      const r = await dispatch({ intent: 'system.volume', params: { action: 'set', level: 150 }, needsConfirm: false });
+      assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
+      assert.equal(receivedLevel, 100, `Expected clamped level 100, got ${receivedLevel}`);
+    } finally {
+      system.setVolume = origSetVolume;
+    }
+  });
+
+  await test('system.volume set level=−10 → clamped to 0', async () => {
+    const system = require('./tools/system');
+    const origSetVolume = system.setVolume;
+    let receivedLevel = null;
+    system.setVolume = async (params) => {
+      receivedLevel = params.level;
+      return { ok: true, data: { action: 'set', level: params.level }, action: `Volume set to ${params.level}%.` };
+    };
+    try {
+      await dispatch({ intent: 'system.volume', params: { action: 'set', level: -10 }, needsConfirm: false });
+      assert.equal(receivedLevel, 0, `Expected clamped level 0, got ${receivedLevel}`);
+    } finally {
+      system.setVolume = origSetVolume;
+    }
+  });
+
+  // ── Verifier ──
+  section('13c. M3.2 — Verifier: system.* intents');
+
+  await test('system.volume → spawn_ok verified:true', async () => {
+    const cr = { intent: 'system.volume' };
+    const tr = { ok: true, data: { action: 'mute' } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'spawn_ok');
+    assert.ok(r.verified);
+  });
+
+  await test('system.lock → spawn_ok verified:true', async () => {
+    const cr = { intent: 'system.lock' };
+    const tr = { ok: true, data: { locked: true } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'spawn_ok');
+    assert.ok(r.verified);
+  });
+
+  await test('system.brightness → spawn_ok verified:true', async () => {
+    const cr = { intent: 'system.brightness' };
+    const tr = { ok: true, data: { action: 'up', from: 50, to: 60 } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'spawn_ok');
+    assert.ok(r.verified);
+    assert.ok(r.detail.includes('60'));
+  });
+
+  await test('system.brightness unavailable → brightness_unsupported verified:false', async () => {
+    const cr = { intent: 'system.brightness' };
+    const tr = { ok: false, error: 'Brightness control not available on this display.' };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'brightness_unsupported');
+    assert.ok(!r.verified);
+  });
+
+  await test('system.volume tool failure → skipped', async () => {
+    const cr = { intent: 'system.volume' };
+    const tr = { ok: false, error: 'PS timed out' };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'skipped');
+    assert.ok(!r.verified);
+  });
+}
+
 // ─── Run all suites ───────────────────────────────────────────────────────────
 
 (async () => {
-  console.log('\n╔════════════════════════════════════════════════════════════════════╗');
-  console.log('║  Jarvis — Phase 1 + Phase 2 M2.1 + M2.2 + M2.3 + M2.4 Tier A Tests  ║');
-  console.log('╚════════════════════════════════════════════════════════════════════╝');
+  console.log('\n╔══════════════════════════════════════════════════════════════════════════╗');
+  console.log('║  Jarvis — Phase 1 + Phase 2 + Phase 3 M3.2 Tier A Tests                 ║');
+  console.log('╚══════════════════════════════════════════════════════════════════════════╝');
 
   await runPathTests();
   await runFileTests();
@@ -1326,6 +1719,8 @@ async function runM24SynonymTests() {
   await runM23Tests();
   await runM24VerifierTests();
   await runM24SynonymTests();
+  await runM31BrowserSiteTests();
+  await runM32SystemTests();
 
   console.log('\n─────────────────────────────────────');
   console.log(`Results: ${passed} passed, ${failed} failed`);
@@ -1334,6 +1729,6 @@ async function runM24SynonymTests() {
     console.error('\nSome tests failed.');
     process.exit(1);
   } else {
-    console.log('\nAll tests passed. Phase 2 M2.4 complete.');
+    console.log('\nAll tests passed. Phase 3 M3.2 complete.');
   }
 })();

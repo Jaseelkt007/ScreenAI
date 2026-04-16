@@ -29,9 +29,13 @@ const SUPPORTED_INTENTS = [
   'browser.back',
   'browser.refresh',
   'browser.addressbar',
+  'browser.site',
   'browser.goto',
   'browser.search',
   'clipboard.write',
+  'system.volume',
+  'system.brightness',
+  'system.lock',
   'system.unsupported',
 ];
 
@@ -56,7 +60,10 @@ Do not return any text outside the JSON. Do not explain your reasoning.
     "query": "<raw search query>",
     "text": "<text to type or copy, depending on intent>",
     "key": "<named key to press, e.g. 'enter' or 'page up'>",
-    "combo": "<normalized shortcut combo, e.g. 'ctrl+c' or 'alt+left'>"
+    "combo": "<normalized shortcut combo, e.g. 'ctrl+c' or 'alt+left'>",
+    "siteName": "<spoken site name, lowercased, e.g. 'gmail', 'youtube', 'github'>",
+    "action": "<for system.volume: 'mute'|'unmute'|'up'|'down'|'set'; for system.brightness: 'up'|'down'>",
+    "level": "<for system.volume action='set': integer 0–100>"
   },
   "raw": "<the original transcript verbatim>",
   "needsConfirm": <true if the action needs confirmation, otherwise false>,
@@ -81,6 +88,7 @@ Do not return any text outside the JSON. Do not explain your reasoning.
 - input.key        — press a single named key (enter, escape, delete, etc.)
 - input.shortcut   — press a keyboard shortcut (ctrl+c, save, undo, etc.)
 - browser.open     — open the default web browser
+- browser.site     — open a named site shortcut (gmail, youtube, github, etc.)
 - browser.newtab   — open a new tab in the focused browser
 - browser.closetab — close the current tab in the focused browser
 - browser.back     — go back to the previous page in the focused browser
@@ -89,6 +97,9 @@ Do not return any text outside the JSON. Do not explain your reasoning.
 - browser.goto     — navigate to a specific URL
 - browser.search   — search Google for a query
 - clipboard.write  — copy text to the system clipboard
+- system.volume    — mute/unmute/raise/lower/set system audio volume
+- system.brightness — increase or decrease display brightness
+- system.lock      — lock the Windows session / screen
 - system.unsupported — command is not supported or cannot be understood
 
 ## Rules
@@ -104,6 +115,10 @@ Do not return any text outside the JSON. Do not explain your reasoning.
 9. input.type requires "text". input.key requires "key". input.shortcut requires "combo".
 10. input.shortcut "combo" values: "ctrl+c", "ctrl+v", "ctrl+z", "ctrl+y", "ctrl+a", "ctrl+s", "ctrl+shift+s", "ctrl+t", "ctrl+w", "ctrl+l", "ctrl+r", "alt+left". Named: "undo"→"ctrl+z", "redo"→"ctrl+y", "copy"→"ctrl+c", "paste"→"ctrl+v", "save"→"ctrl+s", "save as"→"ctrl+shift+s".
 11. browser.newtab, browser.closetab, browser.back, browser.refresh, and browser.addressbar never have params.
+12. browser.site requires "siteName" (lowercased spoken name, e.g. "gmail", "youtube"). Use this instead of browser.goto when the user names a site without a domain suffix (e.g. "open Gmail" not "go to gmail.com").
+13. system.volume requires "action" ('mute'|'unmute'|'up'|'down'|'set'). When action is 'set', also include "level" (integer 0–100). system.volume needsConfirm: false.
+14. system.brightness requires "action" ('up' or 'down'). needsConfirm: false.
+15. system.lock has no params. needsConfirm: true always — locking the screen is non-trivial to reverse.
 
 ## Few-shot examples
 
@@ -140,6 +155,33 @@ Transcript: "go to github.com"
   "confidence": "llm",
   "params": { "url": "github.com" },
   "raw": "go to github.com",
+  "needsConfirm": false
+}
+
+Transcript: "open Gmail"
+{
+  "intent": "browser.site",
+  "confidence": "llm",
+  "params": { "siteName": "gmail" },
+  "raw": "open Gmail",
+  "needsConfirm": false
+}
+
+Transcript: "go to YouTube"
+{
+  "intent": "browser.site",
+  "confidence": "llm",
+  "params": { "siteName": "youtube" },
+  "raw": "go to YouTube",
+  "needsConfirm": false
+}
+
+Transcript: "launch GitHub"
+{
+  "intent": "browser.site",
+  "confidence": "llm",
+  "params": { "siteName": "github" },
+  "raw": "launch GitHub",
   "needsConfirm": false
 }
 
@@ -376,6 +418,60 @@ Transcript: "delete all my files"
   "raw": "delete all my files",
   "needsConfirm": false,
   "reason": "File deletion is not supported."
+}
+
+Transcript: "mute"
+{
+  "intent": "system.volume",
+  "confidence": "llm",
+  "params": { "action": "mute" },
+  "raw": "mute",
+  "needsConfirm": false
+}
+
+Transcript: "volume up"
+{
+  "intent": "system.volume",
+  "confidence": "llm",
+  "params": { "action": "up" },
+  "raw": "volume up",
+  "needsConfirm": false
+}
+
+Transcript: "set volume to 50"
+{
+  "intent": "system.volume",
+  "confidence": "llm",
+  "params": { "action": "set", "level": 50 },
+  "raw": "set volume to 50",
+  "needsConfirm": false
+}
+
+Transcript: "brightness up"
+{
+  "intent": "system.brightness",
+  "confidence": "llm",
+  "params": { "action": "up" },
+  "raw": "brightness up",
+  "needsConfirm": false
+}
+
+Transcript: "dim the screen"
+{
+  "intent": "system.brightness",
+  "confidence": "llm",
+  "params": { "action": "down" },
+  "raw": "dim the screen",
+  "needsConfirm": false
+}
+
+Transcript: "lock the screen"
+{
+  "intent": "system.lock",
+  "confidence": "llm",
+  "params": {},
+  "raw": "lock the screen",
+  "needsConfirm": true
 }
 `.trim();
 

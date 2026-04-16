@@ -5,10 +5,28 @@
  *
  * Windows-first. Zero new npm dependencies — WScript.Shell is available on every Windows system.
  *
- * Phase 2 scope note: WScript.Shell.SendKeys is prototype-quality. It is timing-sensitive,
- * focus-sensitive, and layout-sensitive. It can behave inconsistently with some special keys
- * and international keyboard layouts. This is NOT a permanent robust solution.
- * Plan to evaluate @nut-tree/nut-js in Phase 3 if reliability issues arise in testing.
+ * ── M3.0 WScript.Shell Evaluation Decision ────────────────────────────────────
+ * STATUS: PENDING MANUAL EVALUATION
+ *
+ * Before relying on WScript.Shell for production use, run the following tests
+ * on a real Windows session and record the failure rate:
+ *
+ *   Test 1: typeText("hello world") in Notepad — repeat 5×, count failures
+ *   Test 2: pressShortcut("ctrl+c") in VS Code  — repeat 10×, count failures
+ *   Test 3: pressKey("enter") in a form field    — repeat 5×, count failures
+ *
+ * Decision criteria:
+ *   - Failure rate > 20% on ANY test → migrate keyboard.js to @nut-tree/nut-js
+ *       npm install @nut-tree/nut-js (provides prebuilt Electron-compatible binaries)
+ *       Replace typeText / pressKey / pressShortcut with nut-js equivalents.
+ *       Dispatcher and classifier stay unchanged — tool interface is identical.
+ *   - Failure rate ≤ 5% on ALL tests → keep WScript.Shell, document limitation here.
+ *
+ * Once evaluated, replace this block with:
+ *   DECISION: KEEP WScript.Shell — <failure rates>, <date>
+ * or:
+ *   DECISION: MIGRATED to @nut-tree/nut-js — <reason>, <date>
+ * ──────────────────────────────────────────────────────────────────────────────
  *
  * Safety rules:
  *   - pressShortcut uses an EXPLICIT ALLOWLIST only. No heuristic combo parsing.
@@ -18,10 +36,8 @@
  * Pure Node.js — no Electron imports.
  */
 
-const { execFile } = require('child_process');
+const { runPS } = require('./ps-runner');
 const { consumePendingTypeTargetWindowHandle } = require('../typing-target');
-
-const PS_TIMEOUT_MS = 5000;
 
 const FOCUS_WIN32_TYPE_DEF = `
 if (-not ([System.Management.Automation.PSTypeName]'JarvisKeyboardWin32').Type) {
@@ -108,45 +124,6 @@ const COMBO_TO_WSCRIPT = {
   'right':        '{RIGHT}',
 };
 
-// ─── PowerShell runner ────────────────────────────────────────────────────────
-
-function runPs(command) {
-  return new Promise((resolve) => {
-    let settled = false;
-
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        resolve({ ok: false, stdout: '', stderr: 'PowerShell timed out after 5s' });
-      }
-    }, PS_TIMEOUT_MS);
-
-    try {
-      execFile(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-Command', command],
-        { encoding: 'utf8', timeout: PS_TIMEOUT_MS },
-        (err, stdout, stderr) => {
-          if (settled) return;
-          clearTimeout(timer);
-          settled = true;
-          if (err && !stdout) {
-            resolve({ ok: false, stdout: '', stderr: stderr || err.message });
-          } else {
-            resolve({ ok: !err, stdout: stdout || '', stderr: stderr || '' });
-          }
-        }
-      );
-    } catch (err) {
-      clearTimeout(timer);
-      if (!settled) {
-        settled = true;
-        resolve({ ok: false, stdout: '', stderr: err.message });
-      }
-    }
-  });
-}
-
 // ─── WScript escaping helpers ─────────────────────────────────────────────────
 
 /**
@@ -227,9 +204,9 @@ $shell.SendKeys('${escaped}')
 Write-Output 'OK'
 `;
 
-  const r = await runPs(script);
+  const r = await runPS(script);
   if (!r.ok && !r.stdout) {
-    return { ok: false, error: `PowerShell error: ${r.stderr.trim()}`, action: '' };
+    return { ok: false, error: `PowerShell error: ${(r.stderr || r.error || '').trim()}`, action: '' };
   }
   if (r.stdout.trim() === 'FOCUS_FAILED') {
     return { ok: false, error: 'Could not restore focus to the previous window before typing.', action: '' };
@@ -267,9 +244,9 @@ $shell.SendKeys('${psSingleQuoteEscape(code)}')
 Write-Output 'OK'
 `;
 
-  const r = await runPs(script);
+  const r = await runPS(script);
   if (!r.ok && !r.stdout) {
-    return { ok: false, error: `PowerShell error: ${r.stderr.trim()}`, action: '' };
+    return { ok: false, error: `PowerShell error: ${(r.stderr || r.error || '').trim()}`, action: '' };
   }
   return { ok: true, data: { key: keyName, code }, action: `Pressed ${keyName}.` };
 }
@@ -306,9 +283,9 @@ $shell.SendKeys('${psSingleQuoteEscape(code)}')
 Write-Output 'OK'
 `;
 
-  const r = await runPs(script);
+  const r = await runPS(script);
   if (!r.ok && !r.stdout) {
-    return { ok: false, error: `PowerShell error: ${r.stderr.trim()}`, action: '' };
+    return { ok: false, error: `PowerShell error: ${(r.stderr || r.error || '').trim()}`, action: '' };
   }
   return { ok: true, data: { combo: normalized, code }, action: `Pressed ${combo}.` };
 }

@@ -161,6 +161,30 @@ const PATTERN_TABLE = [
     extract: () => ({}),
   },
 
+  // ── system.lock — check first among system intents to avoid "lock" matching other rules ──
+  {
+    intent:  'system.lock',
+    pattern: /\b(lock|lock\s+(?:the\s+|my\s+)?(?:screen|computer|pc|laptop|session))\b/i,
+    extract: () => ({}),
+    needsConfirm: true,
+  },
+
+  // ── system.volume ──
+  {
+    intent:  'system.volume',
+    pattern: /\b(mute|silence|unmute)\b|\b(volume|sound)\b.{0,25}\b(up|down|louder|quieter|higher|lower|increase|decrease|max|maximum|min|minimum)\b|\b(increase|decrease|raise|lower|turn\s+up|turn\s+down|crank\s+up)\b.{0,15}\b(volume|sound)\b|\bset\s+(?:the\s+)?volume\s+to\s+(?:\d+|zero|ten|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|max(?:imum)?|full|min(?:imum)?)|\b(louder|quieter)\b/i,
+    extract: (m, t) => extractVolumeParams(t),
+  },
+
+  // ── system.brightness ──
+  {
+    intent:  'system.brightness',
+    pattern: /\b(brightness)\b.{0,20}\b(up|down|higher|lower|increase|decrease|more|less|max|min|dim)\b|\b(dim|brighten)\b.{0,20}\b(screen|display)\b|\b(increase|decrease)\b.{0,15}\b(brightness)\b/i,
+    extract: (m, t) => ({
+      action: /\b(up|higher|increase|more|brighten|max)\b/i.test(t) ? 'up' : 'down',
+    }),
+  },
+
   // ── app.open ──
   {
     intent:  'app.open',
@@ -211,6 +235,17 @@ const PATTERN_TABLE = [
     intent:  'browser.open',
     pattern: /\b(open|launch)\b.{0,30}\b(browser|web browser|internet|the web)\b/i,
     extract: () => ({}),
+  },
+
+  // ── browser.site — named site shortcuts ("open Gmail", "go to YouTube") ──
+  // Must be placed BEFORE browser.goto so "go to YouTube" hits this first.
+  // app.open fires before this rule, so "open Chrome" still routes to app.open.
+  // (?!\.) negative lookahead ensures "youtube.com" does NOT match here —
+  // domain-suffixed inputs (e.g. "go to youtube.com") fall through to browser.goto.
+  {
+    intent:  'browser.site',
+    pattern: /\b(open|go to|visit|launch|load|navigate to)\b.{0,20}\b(gmail|youtube|github|linkedin|twitter|reddit|calendar|google calendar|notion|stackoverflow|stack overflow|google docs|google drive|google maps|chatgpt|claude|netflix|spotify web|amazon|google)\b(?!\.)/i,
+    extract: (m, t) => ({ siteName: extractSiteName(t) }),
   },
 
   // ── browser.goto (explicit URL with scheme) ──
@@ -530,6 +565,54 @@ function extractSearchQuery(t) {
   return m ? m[1].trim() : t.trim();
 }
 
+// ─── M3.2 extraction helpers ─────────────────────────────────────────────────
+
+// Word-to-number map for spoken volume levels ("set volume to seventy")
+const WORD_LEVELS = {
+  'zero': 0, 'min': 0, 'minimum': 0,
+  'ten': 10, 'twenty': 20, 'thirty': 30, 'forty': 40, 'fifty': 50,
+  'sixty': 60, 'seventy': 70, 'eighty': 80, 'ninety': 90,
+  'hundred': 100, 'one hundred': 100, 'max': 100, 'maximum': 100, 'full': 100,
+};
+
+/**
+ * Extract volume action and level from transcript.
+ * Returns { action, level? } for system.volume intent.
+ */
+function extractVolumeParams(t) {
+  const lower = t.toLowerCase();
+
+  if (/\bunmute\b/.test(lower)) return { action: 'unmute' };
+  if (/\b(mute|silence)\b/.test(lower)) return { action: 'mute' };
+
+  // "set volume to N" / "set the volume to N%" / "volume at N"
+  const setDigit = lower.match(/\bset\s+(?:the\s+)?volume\s+to\s+(\d+)|\bvolume\b.{0,20}\bat\s+(\d+)/);
+  if (setDigit) {
+    const raw = parseInt(setDigit[1] || setDigit[2], 10);
+    return { action: 'set', level: Math.max(0, Math.min(100, raw)) };
+  }
+
+  // "set volume to seventy" / "set the volume to max"
+  const setWord = lower.match(/\bset\s+(?:the\s+)?volume\s+to\s+(one hundred|zero|ten|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|max(?:imum)?|full|min(?:imum)?)\b/);
+  if (setWord) {
+    const level = WORD_LEVELS[setWord[1]];
+    if (level !== undefined) return { action: 'set', level };
+  }
+
+  if (/\b(volume\s+up|sound\s+up|louder|higher\s+volume|increase\s+(?:the\s+)?volume|turn\s+(?:the\s+)?volume\s+up|raise\s+volume)\b/i.test(t)) {
+    return { action: 'up' };
+  }
+  if (/\b(volume\s+down|sound\s+down|quieter|lower\s+volume|decrease\s+(?:the\s+)?volume|turn\s+(?:the\s+)?volume\s+down|reduce\s+volume)\b/i.test(t)) {
+    return { action: 'down' };
+  }
+
+  // Generic direction words near "volume"
+  if (/\b(up|higher|increase|louder|raise|max|maximum)\b/i.test(t)) return { action: 'up' };
+  if (/\b(down|lower|decrease|quieter|reduce|min|minimum)\b/i.test(t)) return { action: 'down' };
+
+  return { action: 'up' }; // fallback
+}
+
 // ─── M2.2 extraction helpers ──────────────────────────────────────────────────
 
 /**
@@ -606,6 +689,26 @@ function extractKeyName(t) {
     if (re.test(lower)) return key;
   }
   return null;
+}
+
+/**
+ * Extract the spoken site name from a browser.site command.
+ * Strips trigger verbs and noise words so the raw site name remains.
+ * e.g. "open my Gmail" → "gmail", "go to the YouTube website" → "youtube"
+ */
+function extractSiteName(t) {
+  let s = t.toLowerCase().trim();
+
+  // Strip trigger verbs at the start
+  s = s.replace(/^(open|go to|visit|launch|load|navigate to)\s+/i, '');
+
+  // Strip leading articles/possessives
+  s = s.replace(/^(the|my)\s+/, '');
+
+  // Strip trailing noise words
+  s = s.replace(/\s+(website|web|page|site)$/, '');
+
+  return s.trim();
 }
 
 /**

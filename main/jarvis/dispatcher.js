@@ -65,6 +65,39 @@ async function dispatch(classifierResult) {
       return files.createDir({ name, locationHint: params.locationHint });
     }
 
+    // ── System ops (PowerShell / rundll32) ───────────────────────────────────
+
+    case 'system.volume': {
+      const validActions = ['mute', 'unmute', 'up', 'down', 'set'];
+      const action = params.action;
+      if (!action || !validActions.includes(action)) {
+        throw new DispatchError(`Invalid volume action: "${action}". Expected one of: ${validActions.join(', ')}`);
+      }
+      const volumeParams = { ...params };
+      if (action === 'set') {
+        const raw = Number(params.level);
+        if (isNaN(raw)) throw new DispatchError('Missing or invalid level for volume set.');
+        // Clamp 0–100 before dispatching
+        volumeParams.level = Math.max(0, Math.min(100, raw));
+      }
+      const system = require('./tools/system');
+      return system.setVolume(volumeParams);
+    }
+
+    case 'system.brightness': {
+      const action = params.action;
+      if (action !== 'up' && action !== 'down') {
+        throw new DispatchError(`Invalid brightness action: "${action}". Expected 'up' or 'down'.`);
+      }
+      const system = require('./tools/system');
+      return system.setBrightness(action);
+    }
+
+    case 'system.lock': {
+      const system = require('./tools/system');
+      return system.lockScreen();
+    }
+
     // ── App ops (Electron / PowerShell) ──────────────────────────────────────
 
     case 'app.open': {
@@ -105,6 +138,26 @@ async function dispatch(classifierResult) {
     }
 
     // ── Browser ops (Electron) ────────────────────────────────────────────────
+
+    case 'browser.site': {
+      const siteName = requireParam(params.siteName, 'site name');
+      const sites    = require('./tools/sites');
+      const url      = sites.resolveSiteUrl(siteName);
+      if (!url) {
+        return {
+          ok:     false,
+          error:  `I don't have a shortcut for "${siteName}" yet.`,
+          action: '',
+        };
+      }
+      const { shell } = require('electron');
+      await shell.openExternal(url);
+      return {
+        ok:     true,
+        data:   { launched: true, url },
+        action: `Opened ${siteName}.`,
+      };
+    }
 
     case 'browser.open': {
       const { openBrowser } = require('./tools/browser');

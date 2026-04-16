@@ -14,16 +14,16 @@
  *   timing-sensitive and focus-sensitive. Evaluate @nut-tree/nut-js in Phase 3
  *   if reliability issues arise.
  *
- *   minimizeWindow / maximizeWindow with no appName uses GetForegroundWindow()
- *   inside the spawned PowerShell process. Due to process isolation this captures
- *   the PS window itself rather than the user's intended window. Prefer named-app
- *   commands ("minimize chrome") for reliable results. Phase 3 item.
+ *   minimizeWindow / maximizeWindow with no appName now captures the foreground
+ *   HWND in the main process BEFORE spawning PowerShell (via getForegroundWindowInfo),
+ *   then passes the HWND to the PS script. This fixes the Phase 2 bug where PS
+ *   captured its own window as the foreground window. (M3.0 Debt 1 fix)
  *
  * Pure Node.js — no Electron imports.
  */
 
-const { execFile } = require('child_process');
 const { APP_NAMES, BROWSER_PROCESS_NAMES } = require('./app-names');
+const { runPS } = require('./ps-runner');
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -31,8 +31,6 @@ const { APP_NAMES, BROWSER_PROCESS_NAMES } = require('./app-names');
 const PROTECTED_PROCESSES = new Set([
   'explorer', 'winlogon', 'csrss', 'services', 'svchost', 'lsass', 'system',
 ]);
-
-const PS_TIMEOUT_MS = 5000;
 
 /**
  * Win32 Add-Type definition block — included in every PS script that needs it.
@@ -58,49 +56,6 @@ public class JarvisWin32 {
 // ShowWindow nCmdShow constants
 const SW_MINIMIZE = 6;
 const SW_MAXIMIZE = 3;
-
-// ─── PowerShell runner ────────────────────────────────────────────────────────
-
-/**
- * Run a PowerShell command string. Returns { ok, stdout, stderr }.
- * Resolves (never rejects) — timeout results in ok: false.
- */
-function runPs(command) {
-  return new Promise((resolve) => {
-    let settled = false;
-
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        resolve({ ok: false, stdout: '', stderr: 'PowerShell timed out after 5s' });
-      }
-    }, PS_TIMEOUT_MS);
-
-    try {
-      execFile(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-Command', command],
-        { encoding: 'utf8', timeout: PS_TIMEOUT_MS },
-        (err, stdout, stderr) => {
-          if (settled) return;
-          clearTimeout(timer);
-          settled = true;
-          if (err && !stdout) {
-            resolve({ ok: false, stdout: '', stderr: stderr || err.message });
-          } else {
-            resolve({ ok: !err, stdout: stdout || '', stderr: stderr || '' });
-          }
-        }
-      );
-    } catch (err) {
-      clearTimeout(timer);
-      if (!settled) {
-        settled = true;
-        resolve({ ok: false, stdout: '', stderr: err.message });
-      }
-    }
-  });
-}
 
 // ─── Name resolution ─────────────────────────────────────────────────────────
 
@@ -132,9 +87,25 @@ Write-Output 'OK'
 function activeWindowScript(swCmd) {
   // NOTE: GetForegroundWindow() here captures whatever is focused at PS launch time,
   // which is typically the PS window itself. Prefer named-app commands in practice.
+  // This fallback is only used when getForegroundWindowInfo() fails to return an HWND.
   return `
 ${WIN32_TYPE_DEF}
 $hwnd = [JarvisWin32]::GetForegroundWindow()
+if ($hwnd -eq [IntPtr]::Zero) { Write-Output 'NO_WINDOW'; exit 0 }
+[JarvisWin32]::ShowWindow($hwnd, ${swCmd}) | Out-Null
+Write-Output 'OK'
+`;
+}
+
+/**
+ * Script that operates on a specific HWND passed from the main process.
+ * Used by minimizeWindow/maximizeWindow when appName is null — the HWND is
+ * captured BEFORE PS spawns so it correctly reflects the user's window, not PS.
+ */
+function hwndWindowScript(hwnd, swCmd) {
+  return `
+${WIN32_TYPE_DEF}
+$hwnd = [IntPtr]::new([Int64]::Parse('${hwnd}'))
 if ($hwnd -eq [IntPtr]::Zero) { Write-Output 'NO_WINDOW'; exit 0 }
 [JarvisWin32]::ShowWindow($hwnd, ${swCmd}) | Out-Null
 Write-Output 'OK'
@@ -180,9 +151,9 @@ $still = Get-Process -Name '${processName}' -ErrorAction SilentlyContinue
 if ($still) { Write-Output 'STILL_RUNNING' } else { Write-Output 'CLOSED' }
 `;
 
-  const r = await runPs(script);
+  const r = await runPS(script);
   if (!r.ok && !r.stdout) {
-    return { ok: false, error: `PowerShell error: ${r.stderr.trim()}`, action: '' };
+    return { ok: false, error: `PowerShell error: ${(r.stderr || r.error || '').trim()}`, action: '' };
   }
 
   const out = r.stdout.trim();
@@ -219,9 +190,9 @@ if (-not $proc) { Write-Output 'NOT_FOUND'; exit 0 }
 Write-Output 'OK'
 `;
 
-  const r = await runPs(script);
+  const r = await runPS(script);
   if (!r.ok && !r.stdout) {
-    return { ok: false, error: `PowerShell error: ${r.stderr.trim()}`, action: '' };
+    return { ok: false, error: `PowerShell error: ${(r.stderr || r.error || '').trim()}`, action: '' };
   }
 
   const out = r.stdout.trim();
@@ -235,19 +206,66 @@ Write-Output 'OK'
 }
 
 /**
+ * Capture the foreground window HWND + process name in the main process.
+ * Called BEFORE spawning any PS script so the result reflects the user's
+ * actual focused window, not the PS console.
+ *
+ * Returns { hwnd: string, processName: string } or null on failure.
+ *
+ * @returns {Promise<{ hwnd: string, processName: string }|null>}
+ */
+async function getForegroundWindowInfo() {
+  const script = `
+${WIN32_TYPE_DEF}
+$hwnd = [JarvisWin32]::GetForegroundWindow()
+if ($hwnd -eq [IntPtr]::Zero) { Write-Output 'NONE'; exit 0 }
+$wpid = 0
+[JarvisWin32]::GetWindowThreadProcessId($hwnd, [ref]$wpid) | Out-Null
+if ($wpid -eq 0) { Write-Output 'NONE'; exit 0 }
+$proc = Get-Process -Id $wpid -ErrorAction SilentlyContinue
+if (-not $proc) { Write-Output 'NONE'; exit 0 }
+Write-Output "$($hwnd.ToInt64())|$($proc.ProcessName)"
+`;
+
+  try {
+    const r = await runPS(script);
+    if (!r.ok) return null;
+    const out = r.stdout.trim();
+    if (!out || out === 'NONE') return null;
+    const [hwnd, processName] = out.split('|');
+    if (!hwnd || !/^-?\d+$/.test(hwnd)) return null;
+    return { hwnd, processName: (processName || '').trim() };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Minimize the active window, or a named app window if appName is provided.
+ *
+ * M3.0 Debt 1 fix: when appName is null, we capture the foreground HWND
+ * in the main process FIRST, then pass it to PS. This ensures we minimize
+ * the user's actual window — not the PS console that spawns next.
  *
  * @param {string|null} appName — spoken app name, or null for active window
  * @returns {Promise<ToolResult>}
  */
 async function minimizeWindow(appName) {
-  const script = appName
-    ? namedWindowScript(resolveProcessName(appName), SW_MINIMIZE)
-    : activeWindowScript(SW_MINIMIZE);
+  let script;
 
-  const r = await runPs(script);
+  if (appName) {
+    script = namedWindowScript(resolveProcessName(appName), SW_MINIMIZE);
+  } else {
+    // Capture HWND before PS spawns — fixes the foreground-window capture bug
+    const info = await getForegroundWindowInfo();
+    script = info
+      ? hwndWindowScript(info.hwnd, SW_MINIMIZE)
+      : activeWindowScript(SW_MINIMIZE); // fallback if capture fails
+  }
+
+  const r = await runPS(script);
   if (!r.ok && !r.stdout) {
-    return { ok: false, error: `PowerShell error: ${r.stderr.trim()}`, action: '' };
+    return { ok: false, error: `PowerShell error: ${(r.stderr || r.error || '').trim()}`, action: '' };
   }
 
   const out = r.stdout.trim();
@@ -263,17 +281,27 @@ async function minimizeWindow(appName) {
 /**
  * Maximize the active window, or a named app window if appName is provided.
  *
+ * M3.0 Debt 1 fix: same HWND pre-capture fix as minimizeWindow.
+ *
  * @param {string|null} appName — spoken app name, or null for active window
  * @returns {Promise<ToolResult>}
  */
 async function maximizeWindow(appName) {
-  const script = appName
-    ? namedWindowScript(resolveProcessName(appName), SW_MAXIMIZE)
-    : activeWindowScript(SW_MAXIMIZE);
+  let script;
 
-  const r = await runPs(script);
+  if (appName) {
+    script = namedWindowScript(resolveProcessName(appName), SW_MAXIMIZE);
+  } else {
+    // Capture HWND before PS spawns — fixes the foreground-window capture bug
+    const info = await getForegroundWindowInfo();
+    script = info
+      ? hwndWindowScript(info.hwnd, SW_MAXIMIZE)
+      : activeWindowScript(SW_MAXIMIZE); // fallback if capture fails
+  }
+
+  const r = await runPS(script);
   if (!r.ok && !r.stdout) {
-    return { ok: false, error: `PowerShell error: ${r.stderr.trim()}`, action: '' };
+    return { ok: false, error: `PowerShell error: ${(r.stderr || r.error || '').trim()}`, action: '' };
   }
 
   const out = r.stdout.trim();
@@ -299,9 +327,9 @@ $shell.SendKeys('%{TAB}')
 Write-Output 'OK'
 `;
 
-  const r = await runPs(script);
+  const r = await runPS(script);
   if (!r.ok && !r.stdout) {
-    return { ok: false, error: `PowerShell error: ${r.stderr.trim()}`, action: '' };
+    return { ok: false, error: `PowerShell error: ${(r.stderr || r.error || '').trim()}`, action: '' };
   }
   return { ok: true, data: {}, action: 'Switched window (Alt+Tab).' };
 }
@@ -318,7 +346,7 @@ Get-Process | Where-Object { $_.MainWindowTitle -ne '' } | ForEach-Object {
   Write-Output "$($_.ProcessName)|$($_.MainWindowTitle)|$($_.Id)"
 }
 `;
-  const r = await runPs(script);
+  const r = await runPS(script);
   if (!r.ok) {
     return { ok: false, error: r.stderr.trim(), action: '' };
   }
@@ -360,7 +388,7 @@ Write-Output $proc.ProcessName
 `;
 
   try {
-    const r = await runPs(script);
+    const r = await runPS(script);
     if (!r.ok) return { focused: false, processName: null };
 
     const procName = r.stdout.trim().toLowerCase();
@@ -416,7 +444,7 @@ Write-Output $proc.ProcessName
 `;
 
   try {
-    const r = await runPs(script);
+    const r = await runPS(script);
     if (!r.ok) return { focused: false, processName: null };
 
     const procName = r.stdout.trim().toLowerCase();
@@ -444,7 +472,7 @@ Write-Output $hwnd.ToInt64()
 `;
 
   try {
-    const r = await runPs(script);
+    const r = await runPS(script);
     if (!r.ok) return null;
 
     const handle = (r.stdout || '').trim();
@@ -465,4 +493,5 @@ module.exports = {
   isBrowserFocused,
   restoreWindowAndCheckBrowser,
   captureForegroundWindow,
+  getForegroundWindowInfo,
 };
