@@ -47,7 +47,7 @@ jobs:
 
       - name: Cache npm cache (Linux/macOS)
         if: runner.os != 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.npm
           key: ${{ runner.os }}-npm-${{ steps.setup-node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
@@ -57,7 +57,7 @@ jobs:
 
       - name: Cache npm cache (Windows)
         if: runner.os == 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~\AppData\Local\npm-cache
           key: ${{ runner.os }}-npm-${{ steps.setup-node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
@@ -67,7 +67,7 @@ jobs:
 
       - name: Cache Electron binaries (Linux/macOS)
         if: runner.os != 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/electron
@@ -78,7 +78,7 @@ jobs:
 
       - name: Cache Electron binaries (Windows)
         if: runner.os == 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~\AppData\Local\electron\Cache
