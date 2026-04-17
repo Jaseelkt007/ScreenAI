@@ -483,9 +483,44 @@ Write-Output $hwnd.ToInt64()
   }
 }
 
+/**
+ * Focus a process by name and capture the resulting foreground HWND.
+ * Used by the chain pipeline to lock in the step-1 app's window handle
+ * before dispatching step-2 (typing, browser shortcuts, etc.).
+ *
+ * Waits 200 ms for the OS to commit the focus change before capturing.
+ * Returns the HWND as a decimal string, or null on any failure.
+ *
+ * @param {string} processName — Windows process name (e.g. 'notepad', 'msedge')
+ * @returns {Promise<string|null>}
+ */
+async function focusAndCaptureHwnd(processName) {
+  const script = `
+${WIN32_TYPE_DEF}
+$proc = Get-Process -Name '${processName}' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } | Select-Object -First 1
+if (-not $proc) { Write-Output 'NOT_FOUND'; exit 0 }
+[JarvisWin32]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null
+Start-Sleep -Milliseconds 200
+$hwnd = [JarvisWin32]::GetForegroundWindow()
+if ($hwnd -eq [IntPtr]::Zero) { Write-Output 'NONE'; exit 0 }
+Write-Output $hwnd.ToInt64()
+`;
+
+  try {
+    const r = await runPS(script);
+    if (!r.ok) return null;
+    const out = (r.stdout || '').trim();
+    if (!out || out === 'NOT_FOUND' || out === 'NONE' || !/^-?\d+$/.test(out)) return null;
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 module.exports = {
   closeApp,
   focusApp,
+  focusAndCaptureHwnd,
   minimizeWindow,
   maximizeWindow,
   switchWindow,

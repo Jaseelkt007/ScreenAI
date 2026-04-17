@@ -251,6 +251,10 @@ async function dispatch(classifierResult) {
           action: '',
         };
       }
+      if (classifierResult._chainContext?.kind === 'browser' && classifierResult._chainContext.processName) {
+        const { navigateInWindowByProcess } = require('./tools/browser');
+        return navigateInWindowByProcess(url, classifierResult._chainContext.processName);
+      }
       const { shell } = require('electron');
       await shell.openExternal(url);
       return {
@@ -267,12 +271,22 @@ async function dispatch(classifierResult) {
 
     case 'browser.goto': {
       const url = requireParam(params.url, 'URL');
+      if (classifierResult._chainContext?.kind === 'browser' && classifierResult._chainContext.processName) {
+        const { navigateInWindowByProcess } = require('./tools/browser');
+        return navigateInWindowByProcess(url, classifierResult._chainContext.processName);
+      }
       const { gotoUrl } = require('./tools/browser');
       return gotoUrl(url);
     }
 
     case 'browser.search': {
       const query = requireParam(params.query, 'search query');
+      if (classifierResult._chainContext?.kind === 'browser' && classifierResult._chainContext.processName) {
+        const encodedQuery = encodeURIComponent(query.trim());
+        const searchUrl    = `https://www.google.com/search?q=${encodedQuery}`;
+        const { navigateInWindowByProcess } = require('./tools/browser');
+        return navigateInWindowByProcess(searchUrl, classifierResult._chainContext.processName);
+      }
       const { search } = require('./tools/browser');
       return search(query);
     }

@@ -8,9 +8,26 @@
  *
  * Uses shell.openExternal() — opens URLs in the OS default browser.
  * Requires Electron (shell) — Tier B module.
+ *
+ * navigateInWindowByProcess() is chain-context-only: focuses a specific
+ * browser process and navigates via Ctrl+L + clipboard paste + Enter,
+ * bypassing shell.openExternal() (which always uses the OS default browser).
  */
 
 const { shell } = require('electron');
+const { runPS } = require('./ps-runner');
+
+// Minimal Win32 type for SetForegroundWindow — used by navigateInWindowByProcess.
+const _NAV_WIN32_TYPE_DEF = `
+if (-not ([System.Management.Automation.PSTypeName]'JarvisWin32').Type) {
+  Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class JarvisWin32 {
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+"@
+}`;
 
 // ─── URL helpers ─────────────────────────────────────────────────────────────
 
@@ -117,4 +134,58 @@ async function search(query) {
   }
 }
 
-module.exports = { openBrowser, gotoUrl, search, normaliseUrl };
+/**
+ * Navigate to a URL inside a specific browser process, used when step 1 of a
+ * chain opened or focused that browser. Focuses the process via SetForegroundWindow,
+ * puts the URL on the clipboard, then sends Ctrl+L → Ctrl+V → Enter via WScript.Shell.
+ *
+ * Avoids shell.openExternal() which always targets the OS default browser.
+ *
+ * @param {string} url         — URL as spoken (bare domain accepted)
+ * @param {string} processName — Windows process name (e.g. 'msedge', 'chrome')
+ * @returns {Promise<ToolResult>}
+ */
+async function navigateInWindowByProcess(url, processName) {
+  const normalised = normaliseUrl(url);
+  if (!normalised) {
+    return {
+      ok: false,
+      error: `"${url}" is not a valid web address. Only http and https URLs are supported.`,
+      action: '',
+    };
+  }
+
+  const escapedUrl = normalised.replace(/'/g, "''");
+  const script = `
+${_NAV_WIN32_TYPE_DEF}
+$proc = Get-Process -Name '${processName}' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } | Select-Object -First 1
+if (-not $proc) { Write-Output 'NOT_FOUND'; exit 0 }
+[JarvisWin32]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null
+Start-Sleep -Milliseconds 300
+Set-Clipboard -Value '${escapedUrl}'
+$shell = New-Object -ComObject WScript.Shell
+$shell.SendKeys('^l')
+Start-Sleep -Milliseconds 150
+$shell.SendKeys('^v')
+Start-Sleep -Milliseconds 50
+$shell.SendKeys('{ENTER}')
+Write-Output 'OK'
+`;
+
+  const r = await runPS(script, { timeoutMs: 8000 });
+  if (!r.ok && !r.stdout) {
+    return { ok: false, error: `Could not navigate in browser: ${(r.stderr || r.error || '').trim()}`, action: '' };
+  }
+
+  const out = (r.stdout || '').trim();
+  if (out === 'NOT_FOUND') {
+    return { ok: false, error: `Browser "${processName}" is not running.`, action: '' };
+  }
+  return {
+    ok: true,
+    data: { launched: true, url: normalised },
+    action: `Opened ${normalised}.`,
+  };
+}
+
+module.exports = { openBrowser, gotoUrl, search, normaliseUrl, navigateInWindowByProcess };

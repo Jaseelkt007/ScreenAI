@@ -202,7 +202,8 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0) {
  */
 async function _runChained(parts, wasCapped, hudSend, waitForConfirm, t0) {
   const actions = [];
-  let   chainOk = true;
+  let   chainOk    = true;
+  let   chainContext = null; // populated after step 1 for step-2 focus handoff
 
   for (let i = 0; i < parts.length; i++) {
     const stepLabel = `${i + 1} of 2`;
@@ -244,6 +245,11 @@ async function _runChained(parts, wasCapped, hudSend, waitForConfirm, t0) {
       }
     }
 
+    // ── Inject chain context before step 2 dispatch ───────────────────────────
+    if (i === 1 && chainContext) {
+      _injectChainContext(classified, chainContext);
+    }
+
     // ── Dispatch ──────────────────────────────────────────────────────────────
     hudSend('jarvis:status', { phase: 'executing', intent: classified.intent, step: stepLabel });
     let toolResult;
@@ -275,6 +281,11 @@ async function _runChained(parts, wasCapped, hudSend, waitForConfirm, t0) {
     const verifyResult = await verifierMod.verify(classified, toolResult);
     const actionStr    = buildDisplay(toolResult, verifyResult);
     actions.push(actionStr);
+
+    // ── Build chain context after step 1 success ──────────────────────────────
+    if (i === 0) {
+      chainContext = await _buildChainContext(classified, toolResult);
+    }
   }
 
   // ── All steps done ────────────────────────────────────────────────────────
@@ -301,6 +312,73 @@ async function _runChained(parts, wasCapped, hudSend, waitForConfirm, t0) {
     audioBase64,
     mimeType,
   });
+}
+
+// ─── Chain context helpers ────────────────────────────────────────────────────
+
+/**
+ * After step 1 succeeds, derive an execution context for step 2.
+ * Only produced when step 1 is app.open or app.focus — these are the only
+ * intents that change which window should own subsequent input/navigation.
+ *
+ * Returns { processName, hwnd, kind } or null.
+ * kind: 'browser' | 'app'
+ */
+async function _buildChainContext(classified, toolResult) {
+  const { intent, params = {} } = classified;
+  if (intent !== 'app.open' && intent !== 'app.focus') return null;
+
+  const { APP_NAMES, BROWSER_PROCESS_NAMES } = require('./tools/app-names');
+  const { focusAndCaptureHwnd } = require('./tools/windows');
+
+  let processName;
+  if (intent === 'app.focus') {
+    processName = toolResult.data?.processName;
+  } else {
+    // app.open — look up process name from the spoken app name
+    const key = (params.appName || '').toLowerCase();
+    processName = APP_NAMES[key]?.processName || params.appName;
+    // Give the newly-launched app time to open a window before we focus it
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  if (!processName) return null;
+
+  const hwnd = await focusAndCaptureHwnd(processName);
+  const kind = BROWSER_PROCESS_NAMES.has(processName.toLowerCase()) ? 'browser' : 'app';
+  console.log(`[JARVIS] Chain ctx : processName=${processName} hwnd=${hwnd} kind=${kind}`);
+  return { processName, hwnd, kind };
+}
+
+/**
+ * Before step 2 dispatch, route the chain context to the right mechanism:
+ *
+ *   input.*                    → set pending type-target HWND (typeText restores focus)
+ *   browser.goto/search/site   → attach _chainContext so dispatcher uses navigateInWindowByProcess
+ *   browser shortcuts          → set pending type-target HWND (dispatchBrowserShortcut restores focus)
+ *
+ * No-ops when chainContext has no hwnd and the intent doesn't need it.
+ */
+function _injectChainContext(classified, chainContext) {
+  const { intent } = classified;
+  const { setPendingTypeTargetWindowHandle } = require('./typing-target');
+
+  const isInput          = intent.startsWith('input.');
+  const isBrowserNav     = ['browser.goto', 'browser.search', 'browser.site'].includes(intent);
+  const isBrowserShortcut = [
+    'browser.newtab', 'browser.closetab', 'browser.back', 'browser.refresh', 'browser.addressbar',
+  ].includes(intent);
+
+  if (isInput && chainContext.hwnd) {
+    setPendingTypeTargetWindowHandle(chainContext.hwnd);
+    console.log(`[JARVIS] Chain inject: type target hwnd=${chainContext.hwnd} for ${intent}`);
+  } else if (chainContext.kind === 'browser' && isBrowserNav) {
+    classified._chainContext = chainContext;
+    console.log(`[JARVIS] Chain inject: _chainContext processName=${chainContext.processName} for ${intent}`);
+  } else if (chainContext.kind === 'browser' && isBrowserShortcut && chainContext.hwnd) {
+    setPendingTypeTargetWindowHandle(chainContext.hwnd);
+    console.log(`[JARVIS] Chain inject: type target hwnd=${chainContext.hwnd} for browser shortcut ${intent}`);
+  }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
