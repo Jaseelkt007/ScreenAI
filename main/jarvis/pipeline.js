@@ -21,6 +21,7 @@
 const classifierMod = require('./classifier');
 const dispatcherMod = require('./dispatcher');
 const verifierMod   = require('./verifier');
+const context       = require('./context');
 
 // stt/tts are required lazily so pipeline.js stays importable in Tier A tests
 // without Electron. In M3, stt will be called from runPipelineFromAudio.
@@ -123,6 +124,12 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0) {
       return;
     }
   }
+
+  // ── 3b. Inject module-level context for standalone commands ──────────────────
+  // This extends the chain-context injection (_injectChainContext) to work for
+  // single commands that follow a prior app.focus/file.open in a separate turn.
+  // Only injects when no chain context is already set on the result.
+  _injectStandaloneContext(classifierResult);
 
   // ── 4. Dispatch ──────────────────────────────────────────────────────────────
   hudSend('jarvis:status', { phase: 'executing', intent: classifierResult.intent, transcript });
@@ -443,6 +450,44 @@ function buildActionLabel(classifierResult) {
 function logTiming(label, ms, note) {
   const noteStr = note ? ` (${note})` : '';
   console.log(`[JARVIS] ${label.padEnd(10)}: ${ms}ms${noteStr}`);
+}
+
+// ─── M4.0: Standalone context injection ──────────────────────────────────────
+
+/**
+ * For a single (non-chain) command, inject module-level context if available.
+ *
+ * input.*        → set pending type-target HWND from window context
+ * browser nav    → attach _chainContext from window context (kind=browser)
+ *
+ * Only fires when no _chainContext is already present (chain injection takes
+ * priority because it captures the HWND in real-time with a settle delay).
+ */
+function _injectStandaloneContext(classifierResult) {
+  const { intent } = classifierResult;
+  if (classifierResult._chainContext) return; // chain injection already set
+
+  const { setPendingTypeTargetWindowHandle } = require('./typing-target');
+
+  const isInput      = intent.startsWith('input.');
+  const isBrowserNav = ['browser.goto', 'browser.search', 'browser.site'].includes(intent);
+  const isBrowserShortcut = [
+    'browser.newtab', 'browser.closetab', 'browser.back', 'browser.refresh', 'browser.addressbar',
+  ].includes(intent);
+
+  const win = context.getWindowTarget();
+  if (!win) return;
+
+  if (isInput && win.hwnd) {
+    setPendingTypeTargetWindowHandle(win.hwnd);
+    console.log(`[JARVIS] Ctx inject : type target hwnd=${win.hwnd} for ${intent} (standalone)`);
+  } else if (win.kind === 'browser' && isBrowserNav) {
+    classifierResult._chainContext = { processName: win.processName, hwnd: win.hwnd, kind: 'browser' };
+    console.log(`[JARVIS] Ctx inject : _chainContext processName=${win.processName} for ${intent} (standalone)`);
+  } else if (win.kind === 'browser' && isBrowserShortcut && win.hwnd) {
+    setPendingTypeTargetWindowHandle(win.hwnd);
+    console.log(`[JARVIS] Ctx inject : type target hwnd=${win.hwnd} for ${intent} (standalone shortcut)`);
+  }
 }
 
 module.exports = { runPipelineFromText, runPipelineFromAudio };

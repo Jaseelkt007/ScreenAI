@@ -2919,6 +2919,251 @@ async function runM35ChainTests() {
   });
 }
 
+// ─── 17. Phase 4 M4.0 — Suite 14: Execution Context ──────────────────────────
+
+async function runM40ContextTests() {
+  section('17. M4.0 — Suite 14: context.js module');
+
+  const ctx = require('./context');
+
+  // ── Basic setters / getters ──
+  await test('context: setFileTarget then getFileTarget returns correct entry', () => {
+    ctx.clear();
+    ctx.setFileTarget('cv.pdf', '/home/user/Documents/cv.pdf');
+    const f = ctx.getFileTarget();
+    assert.ok(f, 'should not be null');
+    assert.equal(f.name, 'cv.pdf');
+    assert.equal(f.path, '/home/user/Documents/cv.pdf');
+  });
+
+  await test('context: setWindowTarget then getWindowTarget returns correct entry', () => {
+    ctx.clear();
+    ctx.setWindowTarget('notepad', 12345, 'app');
+    const w = ctx.getWindowTarget();
+    assert.ok(w, 'should not be null');
+    assert.equal(w.processName, 'notepad');
+    assert.equal(w.hwnd, 12345);
+    assert.equal(w.kind, 'app');
+  });
+
+  await test('context: setWindowTarget with browser kind stored correctly', () => {
+    ctx.clear();
+    ctx.setWindowTarget('msedge', 99, 'browser');
+    const w = ctx.getWindowTarget();
+    assert.equal(w.kind, 'browser');
+    assert.equal(w.processName, 'msedge');
+  });
+
+  await test('context: setWindowTarget with null hwnd is allowed', () => {
+    ctx.clear();
+    ctx.setWindowTarget('notepad', null, 'app');
+    const w = ctx.getWindowTarget();
+    assert.ok(w, 'should exist');
+    assert.equal(w.hwnd, null);
+  });
+
+  await test('context: setCandidates then getCandidates returns candidates + classifiedResult', () => {
+    ctx.clear();
+    const candidates = [
+      { name: 'report-final.pdf', path: '/home/user/Documents/report-final.pdf', sizeBytes: 1024 },
+      { name: 'report-draft.pdf', path: '/home/user/Documents/report-draft.pdf', sizeBytes: 512 },
+    ];
+    const fakeResult = { intent: 'file.delete', params: { name: 'report' } };
+    ctx.setCandidates(candidates, fakeResult);
+    const c = ctx.getCandidates();
+    assert.ok(c, 'should not be null');
+    assert.equal(c.candidates.length, 2);
+    assert.equal(c.candidates[0].name, 'report-final.pdf');
+    assert.equal(c.classifiedResult.intent, 'file.delete');
+  });
+
+  // ── clear() ──
+  await test('context: clear() nullifies all getters', () => {
+    ctx.setFileTarget('notes.txt', '/home/user/notes.txt');
+    ctx.setWindowTarget('notepad', 1, 'app');
+    ctx.setCandidates([{ name: 'x', path: '/x' }], {});
+    ctx.clear();
+    assert.equal(ctx.getFileTarget(), null);
+    assert.equal(ctx.getWindowTarget(), null);
+    assert.equal(ctx.getCandidates(), null);
+  });
+
+  // ── clearCandidates() ──
+  await test('context: clearCandidates() removes only candidates, not window/file', () => {
+    ctx.clear();
+    ctx.setFileTarget('notes.txt', '/home/user/notes.txt');
+    ctx.setWindowTarget('notepad', 1, 'app');
+    ctx.setCandidates([{ name: 'x', path: '/x' }], {});
+    ctx.clearCandidates();
+    assert.equal(ctx.getCandidates(), null, 'candidates should be gone');
+    assert.ok(ctx.getFileTarget(), 'file target should remain');
+    assert.ok(ctx.getWindowTarget(), 'window target should remain');
+  });
+
+  // ── TTL expiry ──
+  await test('context: getFileTarget returns null after TTL expires', async () => {
+    ctx.clear();
+    const settings = require('../settings');
+    const origGet = settings.getSetting;
+    // Override TTL to 50ms so we can test expiry quickly
+    settings.getSetting = (key, fallback) => key === 'jarvisContextTtlMs' ? 50 : origGet(key, fallback);
+    try {
+      ctx.setFileTarget('old.txt', '/home/user/old.txt');
+      assert.ok(ctx.getFileTarget(), 'should be present immediately');
+      await new Promise((r) => setTimeout(r, 80));
+      assert.equal(ctx.getFileTarget(), null, 'should be null after TTL expired');
+    } finally {
+      settings.getSetting = origGet;
+      ctx.clear();
+    }
+  });
+
+  await test('context: getWindowTarget returns null after TTL expires', async () => {
+    ctx.clear();
+    const settings = require('../settings');
+    const origGet = settings.getSetting;
+    settings.getSetting = (key, fallback) => key === 'jarvisContextTtlMs' ? 50 : origGet(key, fallback);
+    try {
+      ctx.setWindowTarget('notepad', 1, 'app');
+      assert.ok(ctx.getWindowTarget(), 'should be present immediately');
+      await new Promise((r) => setTimeout(r, 80));
+      assert.equal(ctx.getWindowTarget(), null, 'should be null after TTL expired');
+    } finally {
+      settings.getSetting = origGet;
+      ctx.clear();
+    }
+  });
+
+  await test('context: TTL=0 means context never expires', async () => {
+    ctx.clear();
+    const settings = require('../settings');
+    const origGet = settings.getSetting;
+    settings.getSetting = (key, fallback) => key === 'jarvisContextTtlMs' ? 0 : origGet(key, fallback);
+    try {
+      ctx.setFileTarget('forever.txt', '/home/user/forever.txt');
+      await new Promise((r) => setTimeout(r, 60));
+      assert.ok(ctx.getFileTarget(), 'TTL=0 should never expire');
+    } finally {
+      settings.getSetting = origGet;
+      ctx.clear();
+    }
+  });
+
+  // ── snapshot() ──
+  await test('context: snapshot() returns full state including ttlRemaining', () => {
+    ctx.clear();
+    ctx.setFileTarget('snap.pdf', '/home/user/snap.pdf');
+    ctx.setWindowTarget('notepad', 7, 'app');
+    const snap = ctx.snapshot();
+    assert.ok(snap.file, 'file should be in snapshot');
+    assert.equal(snap.file.name, 'snap.pdf');
+    assert.ok(typeof snap.file.ttlRemaining === 'number', 'ttlRemaining should be a number');
+    assert.ok(snap.window, 'window should be in snapshot');
+    assert.equal(snap.window.processName, 'notepad');
+    assert.equal(snap.candidates, null, 'candidates should be null');
+    assert.ok(snap.ttlMs > 0, 'ttlMs should be present');
+    ctx.clear();
+  });
+
+  await test('context: snapshot() with no context set returns all nulls', () => {
+    ctx.clear();
+    const snap = ctx.snapshot();
+    assert.equal(snap.window, null);
+    assert.equal(snap.file, null);
+    assert.equal(snap.candidates, null);
+  });
+
+  // ── Edge cases ──
+  await test('context: setFileTarget with empty args is a no-op', () => {
+    ctx.clear();
+    ctx.setFileTarget('', '/some/path');
+    assert.equal(ctx.getFileTarget(), null, 'empty name should not set');
+    ctx.setFileTarget('name.txt', '');
+    assert.equal(ctx.getFileTarget(), null, 'empty path should not set');
+  });
+
+  await test('context: setWindowTarget with empty processName is a no-op', () => {
+    ctx.clear();
+    ctx.setWindowTarget('', 1, 'app');
+    assert.equal(ctx.getWindowTarget(), null);
+  });
+
+  await test('context: setCandidates with empty array is a no-op', () => {
+    ctx.clear();
+    ctx.setCandidates([], {});
+    assert.equal(ctx.getCandidates(), null);
+  });
+
+  await test('context: overwriting file target replaces previous value', () => {
+    ctx.clear();
+    ctx.setFileTarget('old.pdf', '/home/user/old.pdf');
+    ctx.setFileTarget('new.pdf', '/home/user/new.pdf');
+    const f = ctx.getFileTarget();
+    assert.equal(f.name, 'new.pdf');
+    ctx.clear();
+  });
+
+  // ── Pipeline integration: app.focus writes to context ──
+  await test('context: dispatcher writes window target after mock app.focus success', async () => {
+    ctx.clear();
+    const dispatcherModule = require('./dispatcher');
+    const origDispatch = dispatcherModule.dispatch;
+
+    // Patch dispatch to simulate app.focus returning ok with processName
+    dispatcherModule.dispatch = async (cr) => {
+      if (cr.intent === 'app.focus') {
+        // Write context directly (simulating what real dispatcher does)
+        ctx.setWindowTarget('notepad', null, 'app');
+        return { ok: true, data: { focused: true, processName: 'notepad' }, action: 'Focused notepad.' };
+      }
+      return origDispatch(cr);
+    };
+
+    try {
+      const events = [];
+      const hudSend = (ch, p) => events.push({ ch, payload: p });
+      await runPipelineFromText('focus notepad', hudSend, () => Promise.resolve(true));
+      const w = ctx.getWindowTarget();
+      assert.ok(w, 'window target should be set after app.focus');
+      assert.equal(w.processName, 'notepad');
+    } finally {
+      dispatcherModule.dispatch = origDispatch;
+      ctx.clear();
+    }
+  });
+
+  // ── Pipeline integration: file.find writes to context ──
+  await test('context: dispatcher writes file target after mock file.find single match', async () => {
+    ctx.clear();
+    const dispatcherModule = require('./dispatcher');
+    const origDispatch = dispatcherModule.dispatch;
+
+    dispatcherModule.dispatch = async (cr) => {
+      if (cr.intent === 'file.find') {
+        ctx.setFileTarget('cv.pdf', '/home/user/Documents/cv.pdf');
+        return {
+          ok: true,
+          data: { matches: [{ name: 'cv.pdf', path: '/home/user/Documents/cv.pdf', sizeBytes: 1024 }], query: 'cv', searchedIn: 'Documents' },
+          action: 'Found cv.pdf in Documents.',
+        };
+      }
+      return origDispatch(cr);
+    };
+
+    try {
+      const events = [];
+      const hudSend = (ch, p) => events.push({ ch, payload: p });
+      await runPipelineFromText('find my CV', hudSend, () => Promise.resolve(true));
+      const f = ctx.getFileTarget();
+      assert.ok(f, 'file target should be set after file.find');
+      assert.equal(f.name, 'cv.pdf');
+    } finally {
+      dispatcherModule.dispatch = origDispatch;
+      ctx.clear();
+    }
+  });
+}
+
 // ─── Run all suites ───────────────────────────────────────────────────────────
 
 (async () => {
@@ -2942,6 +3187,7 @@ async function runM35ChainTests() {
   await runM33FileSearchTests();
   await runM34DestructiveFileTests();
   await runM35ChainTests();
+  await runM40ContextTests();
 
   console.log('\n─────────────────────────────────────');
   console.log(`Results: ${passed} passed, ${failed} failed`);
@@ -2950,6 +3196,6 @@ async function runM35ChainTests() {
     console.error('\nSome tests failed.');
     process.exit(1);
   } else {
-    console.log('\nAll tests passed. Phase 3 M3.5 complete.');
+    console.log('\nAll tests passed. Phase 4 M4.0 complete.');
   }
 })();

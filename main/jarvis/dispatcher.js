@@ -10,7 +10,8 @@
  * so that dispatcher.js itself is partially testable in plain Node for file ops.
  */
 
-const files = require('./tools/files');
+const files   = require('./tools/files');
+const context = require('./context');
 
 // ─── Destructive-match config ────────────────────────────────────────────────
 
@@ -76,16 +77,24 @@ async function dispatch(classifierResult) {
     case 'file.find': {
       const query = params.query || params.extension;
       if (!query) throw new DispatchError('No search query or extension provided for file search.');
-      return files.findFiles({
+      const findResult = await files.findFiles({
         query:        params.query,
         extension:    params.extension,
         locationHint: params.locationHint,
       });
+      // Write file context when exactly one match found (unambiguous)
+      if (findResult.ok && findResult.data?.matches?.length === 1) {
+        const m = findResult.data.matches[0];
+        context.setFileTarget(m.name, m.path);
+      }
+      return findResult;
     }
 
     case 'file.open': {
       if (params.path) {
-        return files.openFile({ path: params.path });
+        const openResult = await files.openFile({ path: params.path });
+        if (openResult.ok && params.name) context.setFileTarget(params.name, params.path);
+        return openResult;
       }
       if (params.name) {
         const findResult = await files.findFiles({
@@ -95,7 +104,10 @@ async function dispatch(classifierResult) {
         if (!findResult.ok || !findResult.data || findResult.data.matches.length === 0) {
           return { ok: false, error: `Couldn't find a file named "${params.name}".`, action: '' };
         }
-        return files.openFile({ path: findResult.data.matches[0].path });
+        const topMatch   = findResult.data.matches[0];
+        const openResult = await files.openFile({ path: topMatch.path });
+        if (openResult.ok) context.setFileTarget(topMatch.name, topMatch.path);
+        return openResult;
       }
       throw new DispatchError('No filename or path provided for file open.');
     }
@@ -204,7 +216,14 @@ async function dispatch(classifierResult) {
     case 'app.open': {
       const appName = requireParam(params.appName, 'app name');
       const { openApp } = require('./tools/apps');
-      return openApp(appName);
+      const openResult = await openApp(appName);
+      if (openResult.ok) {
+        const { APP_NAMES, BROWSER_PROCESS_NAMES } = require('./tools/app-names');
+        const procName = APP_NAMES[appName]?.processName || appName;
+        const kind     = BROWSER_PROCESS_NAMES.has(procName.toLowerCase()) ? 'browser' : 'app';
+        context.setWindowTarget(procName, openResult.data?.hwnd || null, kind);
+      }
+      return openResult;
     }
 
     case 'app.close': {
@@ -216,7 +235,14 @@ async function dispatch(classifierResult) {
     case 'app.focus': {
       const appName = requireParam(params.appName, 'app name');
       const { focusApp } = require('./tools/windows');
-      return focusApp(appName);
+      const focusResult = await focusApp(appName);
+      if (focusResult.ok) {
+        const procName = focusResult.data?.processName || appName;
+        const { BROWSER_PROCESS_NAMES } = require('./tools/app-names');
+        const kind     = BROWSER_PROCESS_NAMES.has(procName.toLowerCase()) ? 'browser' : 'app';
+        context.setWindowTarget(procName, focusResult.data?.hwnd || null, kind);
+      }
+      return focusResult;
     }
 
     // ── Window ops (PowerShell) ───────────────────────────────────────────────
@@ -253,7 +279,11 @@ async function dispatch(classifierResult) {
       }
       if (classifierResult._chainContext?.kind === 'browser' && classifierResult._chainContext.processName) {
         const { navigateInWindowByProcess } = require('./tools/browser');
-        return navigateInWindowByProcess(url, classifierResult._chainContext.processName);
+        const navResult = await navigateInWindowByProcess(url, classifierResult._chainContext.processName);
+        if (navResult.ok) {
+          context.setWindowTarget(classifierResult._chainContext.processName, classifierResult._chainContext.hwnd || null, 'browser');
+        }
+        return navResult;
       }
       const { shell } = require('electron');
       await shell.openExternal(url);
@@ -273,7 +303,11 @@ async function dispatch(classifierResult) {
       const url = requireParam(params.url, 'URL');
       if (classifierResult._chainContext?.kind === 'browser' && classifierResult._chainContext.processName) {
         const { navigateInWindowByProcess } = require('./tools/browser');
-        return navigateInWindowByProcess(url, classifierResult._chainContext.processName);
+        const navResult = await navigateInWindowByProcess(url, classifierResult._chainContext.processName);
+        if (navResult.ok) {
+          context.setWindowTarget(classifierResult._chainContext.processName, classifierResult._chainContext.hwnd || null, 'browser');
+        }
+        return navResult;
       }
       const { gotoUrl } = require('./tools/browser');
       return gotoUrl(url);

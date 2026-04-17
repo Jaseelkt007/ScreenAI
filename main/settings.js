@@ -78,6 +78,8 @@ function getDefaults() {
     jarvisFileSearchDepth: 3,         // Get-ChildItem -Depth value for file.find
     // Phase 3 — Destructive operations
     jarvisDestructiveConfirm: 'always', // 'always' | 'never' (never only applies to Jarvis workspace)
+    // Phase 4 — Execution context
+    jarvisContextTtlMs: 30000,          // ms before context entries expire; 0 = never
   };
 }
 
