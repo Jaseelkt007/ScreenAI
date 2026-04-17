@@ -240,12 +240,12 @@ function subscribePipeline() {
   unsubscribePipeline();
 
   _unsubStatus = window.jarvis.onStatus((payload) => {
-    const { phase, transcript: t, intent } = payload;
+    const { phase, transcript: t, intent, step } = payload;
     if (t) {
       transcript.textContent = `"${t}"`;
       transcript.classList.remove('hidden');
     }
-    setState(phase, buildPhaseLabel(phase, intent));
+    setState(phase, buildPhaseLabel(phase, intent, step));
   });
 
   _unsubConfirm = window.jarvis.onConfirm((payload) => {
@@ -263,12 +263,13 @@ function unsubscribePipeline() {
   if (_unsubDone)    { _unsubDone();    _unsubDone    = null; }
 }
 
-function buildPhaseLabel(phase, intent) {
+function buildPhaseLabel(phase, intent, step) {
+  const stepPrefix = step ? `[${step}] ` : '';
   const map = {
     transcribing: 'Transcribing…',
-    classifying:  'Thinking…',
-    executing:    intent ? `${intent.split('.')[1] || 'action'}…` : 'Working…',
-    verifying:    'Verifying…',
+    classifying:  step ? `${stepPrefix}Thinking…` : 'Thinking…',
+    executing:    intent ? `${stepPrefix}${intent.split('.')[1] || 'action'}…` : 'Working…',
+    verifying:    step ? `${stepPrefix}Verifying…` : 'Verifying…',
     speaking:     'Speaking…',
   };
   return map[phase] || phase;

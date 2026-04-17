@@ -23,9 +23,10 @@ const assert   = require('assert').strict;
 // Modules under test (pure Node — no Electron dependency)
 const files = require('./tools/files');
 const { resolveJarvisPath, createFile, readFile, writeFile, appendFile, listDir, createDir, LOCATION_MAP } = files;
-const { classify }  = require('./classifier');
-const { dispatch }  = require('./dispatcher');
-const { verify }    = require('./verifier');
+const { classify, splitChain }  = require('./classifier');
+const { dispatch }               = require('./dispatcher');
+const { verify }                 = require('./verifier');
+const { runPipelineFromText }    = require('./pipeline');
 
 // ─── Test harness ─────────────────────────────────────────────────────────────
 
@@ -2629,11 +2630,300 @@ async function runM34DestructiveFileTests() {
   });
 }
 
+// ─── 16. Phase 3 M3.5 — Suite 13: Sequential command chaining ────────────────
+
+async function runM35ChainTests() {
+  section('16. M3.5 — Suite 13: splitChain unit tests');
+
+  // ── splitChain: basic splits ──
+  // NOTE: bare "and" is NOT a chain connector (too collision-prone with noun phrases).
+  // Chain connectors: "and then", "then", "and after that", "followed by", "after that".
+  await test('splitChain("open Chrome and go to YouTube") → 1 part (bare "and" is not a connector)', () => {
+    const r = splitChain('open Chrome and go to YouTube');
+    assert.equal(r.parts.length, 1, `bare "and" must not split. parts: ${JSON.stringify(r.parts)}`);
+    assert.equal(r.wasCapped, false);
+  });
+
+  await test('splitChain("open Chrome and then go to YouTube") → 2 parts', () => {
+    const r = splitChain('open Chrome and then go to YouTube');
+    assert.equal(r.parts.length, 2, `parts: ${JSON.stringify(r.parts)}`);
+    assert.ok(r.parts[0].toLowerCase().includes('open chrome'), `part[0]: "${r.parts[0]}"`);
+    assert.ok(r.parts[1].toLowerCase().includes('go to youtube'), `part[1]: "${r.parts[1]}"`);
+    assert.equal(r.wasCapped, false);
+  });
+
+  await test('splitChain on "and then" connector', () => {
+    const r = splitChain('open notepad and then type hello world');
+    assert.equal(r.parts.length, 2);
+    assert.ok(r.parts[0].toLowerCase().includes('open notepad'), `part[0]: "${r.parts[0]}"`);
+    assert.ok(r.parts[1].toLowerCase().includes('type hello world'), `part[1]: "${r.parts[1]}"`);
+    assert.equal(r.wasCapped, false);
+  });
+
+  await test('splitChain on bare "then" connector', () => {
+    const r = splitChain('mute then lock the screen');
+    assert.equal(r.parts.length, 2);
+    assert.ok(r.parts[0].toLowerCase().includes('mute'), `part[0]: "${r.parts[0]}"`);
+    assert.ok(r.parts[1].toLowerCase().includes('lock'), `part[1]: "${r.parts[1]}"`);
+    assert.equal(r.wasCapped, false);
+  });
+
+  await test('splitChain on "followed by" connector', () => {
+    const r = splitChain('volume up followed by brightness down');
+    assert.equal(r.parts.length, 2);
+    assert.ok(r.parts[0].toLowerCase().includes('volume up'), `part[0]: "${r.parts[0]}"`);
+    assert.ok(r.parts[1].toLowerCase().includes('brightness down'), `part[1]: "${r.parts[1]}"`);
+  });
+
+  await test('splitChain on "and after that" connector', () => {
+    const r = splitChain('mute and after that lock the screen');
+    assert.equal(r.parts.length, 2);
+    assert.ok(r.parts[0].toLowerCase().includes('mute'), `part[0]: "${r.parts[0]}"`);
+    assert.ok(r.parts[1].toLowerCase().includes('lock'), `part[1]: "${r.parts[1]}"`);
+  });
+
+  await test('splitChain single command → 1 part, wasCapped:false', () => {
+    const r = splitChain('open notepad');
+    assert.equal(r.parts.length, 1, `parts: ${JSON.stringify(r.parts)}`);
+    assert.equal(r.parts[0], 'open notepad');
+    assert.equal(r.wasCapped, false);
+  });
+
+  await test('splitChain 3-part chain → capped at 2, wasCapped:true', () => {
+    const r = splitChain('open notepad and then type hello and then save');
+    assert.equal(r.parts.length, 2, `parts: ${JSON.stringify(r.parts)}`);
+    assert.equal(r.wasCapped, true);
+    assert.ok(r.parts[0].toLowerCase().includes('open notepad'), `part[0]: "${r.parts[0]}"`);
+    assert.ok(r.parts[1].toLowerCase().includes('type hello'), `part[1]: "${r.parts[1]}"`);
+  });
+
+  await test('splitChain("create a file called notes.txt and write this: hello world") → correct split', () => {
+    const r = splitChain('create a file called notes.txt and write this: hello world');
+    // "and" without "then" should NOT split — no connector present
+    // This is a single command (no chain connector)
+    assert.equal(r.parts.length, 1, `Should not split on bare "and" without connector. parts: ${JSON.stringify(r.parts)}`);
+  });
+
+  await test('splitChain null/empty → safe handling', () => {
+    const r = splitChain('');
+    assert.equal(r.parts.length, 1);
+    assert.equal(r.wasCapped, false);
+  });
+
+  section('16b. M3.5 — Pipeline chain integration tests');
+
+  // ── Step 1 unsupported → pipeline stops ──
+  await test('chain: step 1 unrecognised → done(ok:false), no step 2 attempted', async () => {
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+    const confirmCalls = [];
+    const waitForConfirm = () => {
+      confirmCalls.push(true);
+      return Promise.resolve(true);
+    };
+
+    // "xyzzy and then mumble" — both parts are unrecognised (no LLM key in test env)
+    await runPipelineFromText('xyzzy and then mumble', hudSend, waitForConfirm);
+
+    const doneEvent = events.find(e => e.ch === 'jarvis:done');
+    assert.ok(doneEvent, 'Should have received jarvis:done event');
+    assert.ok(!doneEvent.payload.ok, 'Should be ok:false');
+    assert.equal(confirmCalls.length, 0, 'No confirmation should have been requested');
+  });
+
+  // ── Step 1 fails via dispatch → step 2 skipped ──
+  await test('chain: step 1 dispatch fails → step 2 not dispatched', async () => {
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+
+    let step2Classified = false;
+    const classifierModule = require('./classifier');
+    const origClassify = classifierModule.classify;
+    classifierModule.classify = async (t) => {
+      // step 1: returns a valid intent so dispatch runs; step 2: track if called
+      if (t.includes('STEP1')) {
+        return { intent: 'system.volume', params: { action: 'mute' }, needsConfirm: false, confidence: 'pattern', raw: t };
+      }
+      step2Classified = true;
+      return { intent: 'system.volume', params: { action: 'up' }, needsConfirm: false, confidence: 'pattern', raw: t };
+    };
+    const dispatcherModule = require('./dispatcher');
+    const origDispatch = dispatcherModule.dispatch;
+    let dispatchCallCount = 0;
+    dispatcherModule.dispatch = async (cr) => {
+      dispatchCallCount++;
+      return { ok: false, error: 'Simulated failure from step 1' };
+    };
+
+    try {
+      await runPipelineFromText('STEP1 and then STEP2', hudSend, () => Promise.resolve(true));
+      const doneEvent = events.find(e => e.ch === 'jarvis:done');
+      assert.ok(doneEvent, 'Should have done event');
+      assert.ok(!doneEvent.payload.ok, 'Should be ok:false');
+      assert.equal(dispatchCallCount, 1, 'Only step 1 should have been dispatched');
+      assert.ok(!step2Classified, 'Step 2 should not have been classified since step 1 failed');
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+    }
+  });
+
+  // ── Step 2 requires confirm → confirm shown for step 2 ──
+  await test('chain: step 2 needsConfirm → confirm requested for step 2', async () => {
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+    const confirmEvents = [];
+    const waitForConfirm = () => {
+      confirmEvents.push(true);
+      return Promise.resolve(true);
+    };
+
+    const classifierModule = require('./classifier');
+    const origClassify = classifierModule.classify;
+    const dispatcherModule = require('./dispatcher');
+    const origDispatch = dispatcherModule.dispatch;
+    const verifierModule = require('./verifier');
+    const origVerify = verifierModule.verify;
+
+    classifierModule.classify = async (t) => {
+      if (t.includes('STEP1')) return { intent: 'system.volume', params: { action: 'mute' }, needsConfirm: false, confidence: 'pattern', raw: t };
+      // step 2 requires confirmation
+      return { intent: 'system.lock', params: {}, needsConfirm: true, confidence: 'pattern', raw: t };
+    };
+    dispatcherModule.dispatch = async (cr) => {
+      return { ok: true, data: {}, action: `Done: ${cr.intent}` };
+    };
+    verifierModule.verify = async (cr, tr) => {
+      return { verified: true, method: 'spawn_ok', detail: 'ok' };
+    };
+
+    try {
+      await runPipelineFromText('STEP1 and then STEP2', hudSend, waitForConfirm);
+      const confirmShown = events.filter(e => e.ch === 'jarvis:confirm');
+      assert.equal(confirmShown.length, 1, 'Exactly one confirm event should be emitted (for step 2)');
+      const doneEvent = events.find(e => e.ch === 'jarvis:done');
+      assert.ok(doneEvent, 'Should have done event');
+      assert.ok(doneEvent.payload.ok, `Should be ok:true, got: ${JSON.stringify(doneEvent.payload)}`);
+      assert.ok(Array.isArray(doneEvent.payload.steps), 'done event should have steps array');
+      assert.equal(doneEvent.payload.steps.length, 2, 'Should have 2 steps');
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify = origVerify;
+    }
+  });
+
+  // ── Successful 2-step chain → steps array in done event ──
+  await test('chain: 2 successful steps → done(ok:true, steps:[action1,action2])', async () => {
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+
+    const classifierModule = require('./classifier');
+    const origClassify = classifierModule.classify;
+    const dispatcherModule = require('./dispatcher');
+    const origDispatch = dispatcherModule.dispatch;
+    const verifierModule = require('./verifier');
+    const origVerify = verifierModule.verify;
+
+    let stepIndex = 0;
+    classifierModule.classify = async (t) => {
+      stepIndex++;
+      return { intent: 'system.volume', params: { action: stepIndex === 1 ? 'mute' : 'up' }, needsConfirm: false, confidence: 'pattern', raw: t };
+    };
+    dispatcherModule.dispatch = async (cr) => {
+      const label = cr.params.action === 'mute' ? 'Muted.' : 'Volume increased.';
+      return { ok: true, data: {}, action: label };
+    };
+    verifierModule.verify = async () => ({ verified: true, method: 'spawn_ok', detail: 'ok' });
+
+    try {
+      stepIndex = 0;
+      await runPipelineFromText('mute and then volume up', hudSend, () => Promise.resolve(true));
+      const doneEvent = events.find(e => e.ch === 'jarvis:done');
+      assert.ok(doneEvent, 'Should have done event');
+      assert.ok(doneEvent.payload.ok, `ok:true expected. payload: ${JSON.stringify(doneEvent.payload)}`);
+      assert.ok(Array.isArray(doneEvent.payload.steps), 'steps should be an array');
+      assert.equal(doneEvent.payload.steps.length, 2, 'Should have 2 steps');
+      assert.ok(doneEvent.payload.display.includes('Muted'), `display: "${doneEvent.payload.display}"`);
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify = origVerify;
+    }
+  });
+
+  // ── 3-step chain → capped at 2 with spoken note ──
+  await test('chain: 3-step utterance → executes 2 steps, display includes cap note', async () => {
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+
+    const classifierModule = require('./classifier');
+    const origClassify = classifierModule.classify;
+    const dispatcherModule = require('./dispatcher');
+    const origDispatch = dispatcherModule.dispatch;
+    const verifierModule = require('./verifier');
+    const origVerify = verifierModule.verify;
+
+    classifierModule.classify = async (t) => ({
+      intent: 'system.volume', params: { action: 'mute' }, needsConfirm: false, confidence: 'pattern', raw: t,
+    });
+    dispatcherModule.dispatch = async () => ({ ok: true, data: {}, action: 'Muted.' });
+    verifierModule.verify = async () => ({ verified: true, method: 'spawn_ok', detail: 'ok' });
+
+    try {
+      await runPipelineFromText('mute and then volume up and then brightness down', hudSend, () => Promise.resolve(true));
+      const doneEvent = events.find(e => e.ch === 'jarvis:done');
+      assert.ok(doneEvent, 'Should have done event');
+      assert.ok(doneEvent.payload.ok, 'Should be ok:true (2 steps ran)');
+      assert.ok(doneEvent.payload.display.toLowerCase().includes('two commands') ||
+                doneEvent.payload.display.toLowerCase().includes('at a time'),
+        `display should include cap note: "${doneEvent.payload.display}"`);
+      assert.equal(doneEvent.payload.steps.length, 2, 'Only 2 steps should be in steps array');
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify = origVerify;
+    }
+  });
+
+  // ── Step indicator in status events ──
+  await test('chain: status events include step field', async () => {
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+
+    const classifierModule = require('./classifier');
+    const origClassify = classifierModule.classify;
+    const dispatcherModule = require('./dispatcher');
+    const origDispatch = dispatcherModule.dispatch;
+    const verifierModule = require('./verifier');
+    const origVerify = verifierModule.verify;
+
+    classifierModule.classify = async (t) => ({
+      intent: 'system.volume', params: { action: 'mute' }, needsConfirm: false, confidence: 'pattern', raw: t,
+    });
+    dispatcherModule.dispatch = async () => ({ ok: true, data: {}, action: 'Muted.' });
+    verifierModule.verify = async () => ({ verified: true, method: 'spawn_ok', detail: 'ok' });
+
+    try {
+      await runPipelineFromText('mute and then volume up', hudSend, () => Promise.resolve(true));
+      const statusWithStep = events.filter(e => e.ch === 'jarvis:status' && e.payload.step);
+      assert.ok(statusWithStep.length > 0, 'At least one status event should have a step field');
+      const steps = statusWithStep.map(e => e.payload.step);
+      assert.ok(steps.includes('1 of 2'), `steps should include "1 of 2", got: ${JSON.stringify(steps)}`);
+      assert.ok(steps.includes('2 of 2'), `steps should include "2 of 2", got: ${JSON.stringify(steps)}`);
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify = origVerify;
+    }
+  });
+}
+
 // ─── Run all suites ───────────────────────────────────────────────────────────
 
 (async () => {
   console.log('\n╔══════════════════════════════════════════════════════════════════════════╗');
-  console.log('║  Jarvis — Phase 1 + Phase 2 + Phase 3 M3.4 Tier A Tests                 ║');
+  console.log('║  Jarvis — Phase 1 + Phase 2 + Phase 3 M3.5 Tier A Tests                 ║');
   console.log('╚══════════════════════════════════════════════════════════════════════════╝');
 
   await runPathTests();
@@ -2651,6 +2941,7 @@ async function runM34DestructiveFileTests() {
   await runM32SystemTests();
   await runM33FileSearchTests();
   await runM34DestructiveFileTests();
+  await runM35ChainTests();
 
   console.log('\n─────────────────────────────────────');
   console.log(`Results: ${passed} passed, ${failed} failed`);
@@ -2659,6 +2950,6 @@ async function runM34DestructiveFileTests() {
     console.error('\nSome tests failed.');
     process.exit(1);
   } else {
-    console.log('\nAll tests passed. Phase 3 M3.4 complete.');
+    console.log('\nAll tests passed. Phase 3 M3.5 complete.');
   }
 })();

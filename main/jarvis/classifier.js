@@ -990,6 +990,28 @@ function extractTypedText(t) {
   return m ? m[1].trim() : '';
 }
 
+// ─── M3.5 — Sequential command chaining ──────────────────────────────────────
+
+/**
+ * Split a transcript on natural chain connectors ("and then", "then", etc.).
+ * Returns { parts: string[], wasCapped: boolean }.
+ *
+ * - Single command → parts: [transcript], wasCapped: false
+ * - Two-part chain → parts: [a, b], wasCapped: false
+ * - Three-or-more → parts: [a, b] (cap at 2), wasCapped: true
+ *
+ * Only splits on connectors surrounded by whitespace to avoid breaking
+ * phrases like "notes then" where "then" is part of a filename.
+ */
+const CHAIN_RE = /\s+(?:and\s+then|and\s+after\s+that|followed\s+by|after\s+that,?|then)\s+/i;
+
+function splitChain(transcript) {
+  const allParts = (transcript || '').split(CHAIN_RE);
+  if (allParts.length <= 1) return { parts: [transcript || ''], wasCapped: false };
+  if (allParts.length > 2)  return { parts: allParts.slice(0, 2), wasCapped: true };
+  return { parts: allParts, wasCapped: false };
+}
+
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
-module.exports = { classify };
+module.exports = { classify, splitChain };
