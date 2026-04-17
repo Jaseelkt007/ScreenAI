@@ -2136,11 +2136,504 @@ async function runM33FileSearchTests() {
   });
 }
 
+// ─── 15. Phase 3 M3.4 — Suite 12: file.delete / file.rename / file.move ──────
+
+async function runM34DestructiveFileTests() {
+  section('15. M3.4 — Suite 12: file.delete / file.rename / file.move classifier');
+
+  const { deleteFile, renameFile, moveFile } = require('./tools/files');
+
+  // ── Classifier: file.delete ──
+  await test('"delete notes.txt" → file.delete, needsConfirm: true', async () => {
+    const r = await classify('delete notes.txt', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.delete', `Got "${r.intent}"`);
+    assert.equal(r.confidence, 'pattern');
+    assert.equal(r.needsConfirm, true, 'file.delete must always needsConfirm');
+    assert.ok(r.params.name && r.params.name.toLowerCase().includes('notes'), `name: "${r.params.name}"`);
+  });
+
+  await test('"remove old-report.pdf" → file.delete, needsConfirm: true', async () => {
+    const r = await classify('remove old-report.pdf', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.delete', `Got "${r.intent}"`);
+    assert.equal(r.needsConfirm, true);
+    assert.ok(r.params.name, `name should be set: "${r.params.name}"`);
+  });
+
+  await test('"erase the file old-report.pdf" → file.delete', async () => {
+    const r = await classify('erase the file old-report.pdf', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.delete', `Got "${r.intent}"`);
+    assert.equal(r.needsConfirm, true);
+  });
+
+  // ── Classifier: file.rename ──
+  await test('"rename notes.txt to journal.txt" → file.rename, needsConfirm: true', async () => {
+    const r = await classify('rename notes.txt to journal.txt', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.rename', `Got "${r.intent}"`);
+    assert.equal(r.confidence, 'pattern');
+    assert.equal(r.needsConfirm, true, 'file.rename must always needsConfirm');
+    assert.ok(r.params.name && r.params.name.toLowerCase().includes('notes'), `name: "${r.params.name}"`);
+    assert.ok(r.params.newName && r.params.newName.toLowerCase().includes('journal'), `newName: "${r.params.newName}"`);
+  });
+
+  await test('"rename the file report.docx to final-report.docx" → file.rename', async () => {
+    const r = await classify('rename the file report.docx to final-report.docx', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.rename', `Got "${r.intent}"`);
+    assert.equal(r.needsConfirm, true);
+    assert.ok(r.params.newName && /final.?report/i.test(r.params.newName), `newName: "${r.params.newName}"`);
+  });
+
+  // ── Classifier: file.move ──
+  await test('"move notes.txt to Desktop" → file.move, needsConfirm: true, targetLocationHint: desktop', async () => {
+    const r = await classify('move notes.txt to Desktop', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.move', `Got "${r.intent}"`);
+    assert.equal(r.confidence, 'pattern');
+    assert.equal(r.needsConfirm, true, 'file.move must always needsConfirm');
+    assert.equal(r.params.targetLocationHint, 'desktop', `targetLocationHint: "${r.params.targetLocationHint}"`);
+  });
+
+  await test('"move budget.xlsx to Documents" → file.move, targetLocationHint: documents', async () => {
+    const r = await classify('move budget.xlsx to Documents', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.move', `Got "${r.intent}"`);
+    assert.equal(r.params.targetLocationHint, 'documents', `targetLocationHint: "${r.params.targetLocationHint}"`);
+  });
+
+  await test('"transfer notes.txt into Downloads" → file.move', async () => {
+    const r = await classify('transfer notes.txt into Downloads', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.move', `Got "${r.intent}"`);
+    assert.equal(r.params.targetLocationHint, 'downloads', `targetLocationHint: "${r.params.targetLocationHint}"`);
+  });
+
+  // ── Collision tests ──
+  await test('COLLISION: "erase" does NOT match file.append', async () => {
+    const r = await classify('erase the file notes.txt', LLM_NEVER_CALLED);
+    assert.notEqual(r.intent, 'file.append', 'Should not be file.append');
+    assert.equal(r.intent, 'file.delete', `Got "${r.intent}"`);
+  });
+
+  await test('COLLISION: "remove" does NOT match file.read', async () => {
+    const r = await classify('remove old-report.pdf', LLM_NEVER_CALLED);
+    assert.notEqual(r.intent, 'file.read', 'Should not be file.read');
+    assert.equal(r.intent, 'file.delete', `Got "${r.intent}"`);
+  });
+
+  // ── Dispatcher: file.delete / file.rename / file.move ──
+  // The dispatcher now does find-first (calls findFiles to resolve real path,
+  // then passes the absolute path to the tool). Tests mock findFiles to avoid
+  // real PS execution in Tier A.
+  section('15b. M3.4 — Dispatcher: file.delete / file.rename / file.move');
+
+  await test('file.delete missing name → DispatchError', async () => {
+    const cr = { intent: 'file.delete', params: {}, needsConfirm: true };
+    try {
+      await dispatch(cr);
+      assert.fail('should have thrown DispatchError');
+    } catch (err) {
+      assert.equal(err.name, 'DispatchError', `Expected DispatchError, got: ${err.name}`);
+      assert.ok(err.message.toLowerCase().includes('filename'), `message: ${err.message}`);
+    }
+  });
+
+  await test('file.delete: dispatcher calls findFiles first, passes resolved path to deleteFile', async () => {
+    const fakePath = path.join(LOCATION_MAP.jarvis, `dispatch-delete-${Date.now()}.txt`);
+    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
+    await fs.promises.writeFile(fakePath, 'dispatch delete test', 'utf8');
+    let pathPassedToDelete = null;
+    const origDelete = files.deleteFile;
+    files.deleteFile = async ({ path: p }) => {
+      pathPassedToDelete = p;
+      return origDelete({ path: p });
+    };
+    try {
+      await withPatchedExports('./tools/files', {
+        findFiles: async () => ({
+          ok:     true,
+          data:   { matches: [{ name: path.basename(fakePath), path: fakePath, sizeBytes: 100, modifiedAt: '', score: 15 }], searchedIn: 'Jarvis', query: 'test' },
+          action: `Found ${path.basename(fakePath)}.`,
+        }),
+      }, async () => {
+        const r = await dispatch({ intent: 'file.delete', params: { name: 'test' }, needsConfirm: true });
+        assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
+        assert.equal(r.data.deleted, true);
+        assert.ok(!fs.existsSync(fakePath), 'File should be gone after dispatch delete');
+      });
+    } finally {
+      files.deleteFile = origDelete;
+      if (fs.existsSync(fakePath)) fs.unlinkSync(fakePath);
+    }
+  });
+
+  await test('file.delete: findFiles returns no matches → ok:false helpful error', async () => {
+    await withPatchedExports('./tools/files', {
+      findFiles: async () => ({ ok: false, error: "No files matching 'missingxyz' found.", action: '' }),
+    }, async () => {
+      const r = await dispatch({ intent: 'file.delete', params: { name: 'missingxyz' }, needsConfirm: true });
+      assert.ok(!r.ok, 'Should return ok:false when file not found');
+      assert.ok(r.error.toLowerCase().includes('missingxyz'), `error: ${r.error}`);
+    });
+  });
+
+  await test('file.rename missing newName → DispatchError', async () => {
+    const cr = { intent: 'file.rename', params: { name: 'notes.txt' }, needsConfirm: true };
+    try {
+      await dispatch(cr);
+      assert.fail('should have thrown DispatchError');
+    } catch (err) {
+      assert.equal(err.name, 'DispatchError');
+    }
+  });
+
+  await test('file.rename: dispatcher calls findFiles, passes resolved path to renameFile', async () => {
+    const srcName = `dispatch-rename-src-${Date.now()}.txt`;
+    const dstName = `dispatch-rename-dst-${Date.now()}.txt`;
+    const srcPath = path.join(LOCATION_MAP.jarvis, srcName);
+    const dstPath = path.join(LOCATION_MAP.jarvis, dstName);
+    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
+    await fs.promises.writeFile(srcPath, 'rename dispatch test', 'utf8');
+    try {
+      await withPatchedExports('./tools/files', {
+        findFiles: async () => ({
+          ok:   true,
+          data: { matches: [{ name: srcName, path: srcPath, sizeBytes: 100, modifiedAt: '', score: 15 }], searchedIn: 'Jarvis', query: srcName },
+          action: `Found ${srcName}.`,
+        }),
+      }, async () => {
+        const r = await dispatch({ intent: 'file.rename', params: { name: srcName, newName: dstName }, needsConfirm: true });
+        assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
+        assert.equal(r.data.renamed, true);
+        assert.ok(!fs.existsSync(srcPath), 'Old path should be gone');
+        assert.ok(fs.existsSync(dstPath), 'New path should exist');
+      });
+    } finally {
+      if (fs.existsSync(srcPath)) fs.unlinkSync(srcPath);
+      if (fs.existsSync(dstPath)) fs.unlinkSync(dstPath);
+    }
+  });
+
+  await test('file.move missing targetLocationHint → DispatchError', async () => {
+    const cr = { intent: 'file.move', params: { name: 'notes.txt' }, needsConfirm: true };
+    try {
+      await dispatch(cr);
+      assert.fail('should have thrown DispatchError');
+    } catch (err) {
+      assert.equal(err.name, 'DispatchError');
+    }
+  });
+
+  await test('file.move: dispatcher calls findFiles, passes resolved path + targetLocationHint to moveFile', async () => {
+    const fname   = `dispatch-move-${Date.now()}.txt`;
+    const srcPath = path.join(LOCATION_MAP.jarvis, fname);
+    const dstPath = path.join(LOCATION_MAP.desktop, fname);
+    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
+    await fs.promises.writeFile(srcPath, 'move dispatch test', 'utf8');
+    try {
+      await withPatchedExports('./tools/files', {
+        findFiles: async () => ({
+          ok:   true,
+          data: { matches: [{ name: fname, path: srcPath, sizeBytes: 100, modifiedAt: '', score: 15 }], searchedIn: 'Jarvis', query: fname },
+          action: `Found ${fname}.`,
+        }),
+      }, async () => {
+        const r = await dispatch({ intent: 'file.move', params: { name: fname, targetLocationHint: 'desktop' }, needsConfirm: true });
+        assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
+        assert.equal(r.data.moved, true);
+        assert.ok(!fs.existsSync(srcPath), 'Source should be gone');
+        // Destination may land at LOCATION_MAP.desktop or the PS-resolved Desktop path;
+        // either way the move should succeed and source be absent.
+      });
+    } finally {
+      try { if (fs.existsSync(srcPath)) fs.unlinkSync(srcPath); } catch {}
+      try { if (fs.existsSync(dstPath)) fs.unlinkSync(dstPath); } catch {}
+    }
+  });
+
+  // ── M3.4 hardening: strict match gate ──
+  section('15b-h. M3.4 — Hardening: strict match gate, spoken normalization, move source fix');
+
+  await test('file.delete: low-confidence match (score < 10) → rejected with helpful error', async () => {
+    await withPatchedExports('./tools/files', {
+      findFiles: async () => ({
+        ok:   true,
+        data: { matches: [{ name: 'other-file.txt', path: '/home/user/other-file.txt', sizeBytes: 100, modifiedAt: '', score: 5 }], searchedIn: 'Jarvis', query: 'xyz' },
+        action: 'Found other-file.txt.',
+      }),
+    }, async () => {
+      const r = await dispatch({ intent: 'file.delete', params: { name: 'xyz' }, needsConfirm: true });
+      assert.ok(!r.ok, 'Should reject low-confidence match');
+      assert.ok(
+        r.error.toLowerCase().includes('confident') || r.error.toLowerCase().includes('score') || r.error.toLowerCase().includes('threshold'),
+        `error should mention confidence/score: ${r.error}`
+      );
+    });
+  });
+
+  await test('file.delete: ambiguous matches (2 candidates ≥ 10) → rejected', async () => {
+    await withPatchedExports('./tools/files', {
+      findFiles: async () => ({
+        ok:   true,
+        data: { matches: [
+          { name: 'notes.txt',        path: '/home/user/notes.txt',        sizeBytes: 100, modifiedAt: '', score: 15 },
+          { name: 'notes-backup.txt', path: '/home/user/notes-backup.txt', sizeBytes: 100, modifiedAt: '', score: 12 },
+        ], searchedIn: 'Documents', query: 'notes' },
+        action: 'Found 2 files.',
+      }),
+    }, async () => {
+      const r = await dispatch({ intent: 'file.delete', params: { name: 'notes' }, needsConfirm: true });
+      assert.ok(!r.ok, 'Should reject ambiguous matches');
+      assert.ok(
+        r.error.toLowerCase().includes('multiple') || r.error.toLowerCase().includes('specific'),
+        `error should mention multiple/specific: ${r.error}`
+      );
+    });
+  });
+
+  await test('file.rename: low-confidence match → rejected', async () => {
+    await withPatchedExports('./tools/files', {
+      findFiles: async () => ({
+        ok:   true,
+        data: { matches: [{ name: 'unrelated.txt', path: '/home/user/unrelated.txt', sizeBytes: 100, modifiedAt: '', score: 3 }], searchedIn: 'Jarvis', query: 'xyz' },
+        action: 'Found unrelated.txt.',
+      }),
+    }, async () => {
+      const r = await dispatch({ intent: 'file.rename', params: { name: 'xyz', newName: 'abc.txt' }, needsConfirm: true });
+      assert.ok(!r.ok, 'Should reject low-confidence match');
+    });
+  });
+
+  await test('file.move: findFiles is called with locationHint=undefined (not destination hint)', async () => {
+    let capturedLocationHint = 'NOT_CAPTURED';
+    const fname   = `move-hint-test-${Date.now()}.txt`;
+    const srcPath = path.join(LOCATION_MAP.jarvis, fname);
+    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
+    await fs.promises.writeFile(srcPath, 'move hint test', 'utf8');
+    try {
+      await withPatchedExports('./tools/files', {
+        findFiles: async (opts) => {
+          capturedLocationHint = opts.locationHint;
+          return {
+            ok:   true,
+            data: { matches: [{ name: fname, path: srcPath, sizeBytes: 100, modifiedAt: '', score: 15 }], searchedIn: 'All', query: fname },
+            action: `Found ${fname}.`,
+          };
+        },
+      }, async () => {
+        const r = await dispatch({ intent: 'file.move', params: { name: fname, targetLocationHint: 'documents', locationHint: 'desktop' }, needsConfirm: true });
+        assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
+      });
+      assert.equal(capturedLocationHint, undefined, `Expected locationHint=undefined, got: "${capturedLocationHint}"`);
+    } finally {
+      try { if (fs.existsSync(srcPath)) fs.unlinkSync(srcPath); } catch {}
+    }
+  });
+
+  await test('classifier: spoken dot normalization on rename — "rename hello dot txt to journal dot txt"', async () => {
+    const r = await classify('rename hello dot txt to journal dot txt', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.rename', `Got "${r.intent}"`);
+    assert.ok(r.params.name && r.params.name.toLowerCase().includes('.txt'),
+      `name should contain .txt: "${r.params.name}"`);
+    assert.ok(r.params.newName && r.params.newName.toLowerCase().includes('.txt'),
+      `newName should contain .txt: "${r.params.newName}"`);
+  });
+
+  await test('classifier: trailing extension word in newName — "rename report.txt to summary PDF"', async () => {
+    const r = await classify('rename report.txt to summary PDF', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.rename', `Got "${r.intent}"`);
+    assert.ok(r.params.newName && /summary\.pdf/i.test(r.params.newName),
+      `newName should be "summary.pdf": "${r.params.newName}"`);
+  });
+
+  await test('files: renameFile auto-preserves extension when newName has none', async () => {
+    const { renameFile } = require('./tools/files');
+    const srcName = `ext-preserve-${Date.now()}.txt`;
+    const srcPath = path.join(LOCATION_MAP.jarvis, srcName);
+    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
+    await fs.promises.writeFile(srcPath, 'ext test', 'utf8');
+    try {
+      const r = await renameFile({ name: srcName, newName: 'journal', locationHint: 'jarvis' });
+      assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
+      assert.ok(r.data.newPath.endsWith('.txt'),
+        `newPath should end with .txt: "${r.data.newPath}"`);
+      assert.ok(fs.existsSync(r.data.newPath), 'Renamed file should exist');
+    } finally {
+      if (fs.existsSync(srcPath)) try { fs.unlinkSync(srcPath); } catch {}
+      const dstPath = path.join(LOCATION_MAP.jarvis, 'journal.txt');
+      if (fs.existsSync(dstPath)) try { fs.unlinkSync(dstPath); } catch {}
+    }
+  });
+
+  await test('files: renameFile does NOT double-add extension when newName already has one', async () => {
+    const { renameFile } = require('./tools/files');
+    const srcName = `no-double-ext-${Date.now()}.txt`;
+    const srcPath = path.join(LOCATION_MAP.jarvis, srcName);
+    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
+    await fs.promises.writeFile(srcPath, 'ext test', 'utf8');
+    try {
+      const r = await renameFile({ name: srcName, newName: 'journal.md', locationHint: 'jarvis' });
+      assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
+      assert.ok(r.data.newPath.endsWith('.md'), `newPath should end with .md: "${r.data.newPath}"`);
+    } finally {
+      if (fs.existsSync(srcPath)) try { fs.unlinkSync(srcPath); } catch {}
+      const dstPath = path.join(LOCATION_MAP.jarvis, 'journal.md');
+      if (fs.existsSync(dstPath)) try { fs.unlinkSync(dstPath); } catch {}
+    }
+  });
+
+  // ── Direct tool tests (backward compat: { name, locationHint } API) ──
+  // These call the tool functions directly (no dispatcher / no findFiles) to verify
+  // the fallback resolution path still works for Tier A Jarvis-workspace files.
+
+  await test('deleteFile({ name, locationHint }) for existing file → ok:true (direct fallback API)', async () => {
+    const tmpName = `direct-delete-${Date.now()}.txt`;
+    const tmpPath = path.join(LOCATION_MAP.jarvis, tmpName);
+    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
+    await fs.promises.writeFile(tmpPath, 'to be deleted', 'utf8');
+    try {
+      const r = await deleteFile({ name: tmpName, locationHint: 'jarvis' });
+      assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
+      assert.equal(r.data.deleted, true);
+      assert.ok(!fs.existsSync(tmpPath), 'File should no longer exist');
+    } finally {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    }
+  });
+
+  await test('deleteFile({ name }) for non-existent file → ok:false', async () => {
+    const r = await deleteFile({ name: 'nonexistent-xyz-99999.txt', locationHint: 'jarvis' });
+    assert.ok(!r.ok, 'Should fail for non-existent file');
+    assert.ok(r.error.toLowerCase().includes('not found'), `error: ${r.error}`);
+  });
+
+  await test('deleteFile path traversal ({ name: "../../../etc/passwd" }) → ok:false', async () => {
+    const r = await deleteFile({ name: '../../../etc/passwd', locationHint: 'jarvis' });
+    assert.ok(!r.ok, 'Should reject path traversal');
+  });
+
+  await test('renameFile({ name, newName, locationHint }) → ok:true (direct fallback API)', async () => {
+    const srcName = `direct-rename-src-${Date.now()}.txt`;
+    const dstName = `direct-rename-dst-${Date.now()}.txt`;
+    const srcPath = path.join(LOCATION_MAP.jarvis, srcName);
+    const dstPath = path.join(LOCATION_MAP.jarvis, dstName);
+    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
+    await fs.promises.writeFile(srcPath, 'rename me', 'utf8');
+    try {
+      const r = await renameFile({ name: srcName, newName: dstName, locationHint: 'jarvis' });
+      assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
+      assert.equal(r.data.renamed, true);
+      assert.ok(!fs.existsSync(srcPath), 'Old name should no longer exist');
+      assert.ok(fs.existsSync(dstPath), 'New name should exist');
+    } finally {
+      if (fs.existsSync(srcPath)) fs.unlinkSync(srcPath);
+      if (fs.existsSync(dstPath)) fs.unlinkSync(dstPath);
+    }
+  });
+
+  await test('renameFile with path separator in newName → ok:false', async () => {
+    const r = await renameFile({ name: 'notes.txt', newName: '../other/journal.txt', locationHint: 'jarvis' });
+    assert.ok(!r.ok, 'Should reject path separators in newName');
+    assert.ok(r.error.toLowerCase().includes('separator') || r.error.toLowerCase().includes('path'), `error: ${r.error}`);
+  });
+
+  await test('renameFile with same name → ok:false', async () => {
+    const tmpName = `same-name-${Date.now()}.txt`;
+    const tmpPath = path.join(LOCATION_MAP.jarvis, tmpName);
+    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
+    await fs.promises.writeFile(tmpPath, 'same', 'utf8');
+    try {
+      const r = await renameFile({ name: tmpName, newName: tmpName, locationHint: 'jarvis' });
+      assert.ok(!r.ok, 'Should reject same-name rename');
+    } finally {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    }
+  });
+
+  await test('moveFile({ path, targetLocationHint:"jarvis" }) to same dir → ok:false', async () => {
+    // Use path-based API: src and dst both in jarvis → same location
+    const fname = `same-move-${Date.now()}.txt`;
+    const p     = path.join(LOCATION_MAP.jarvis, fname);
+    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
+    await fs.promises.writeFile(p, 'same location test', 'utf8');
+    try {
+      const r = await moveFile({ path: p, targetLocationHint: 'jarvis' });
+      assert.ok(!r.ok, 'Should reject same-location move');
+    } finally {
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+    }
+  });
+
+  // ── Verifier: file.delete → file_gone ──
+  section('15c. M3.4 — Verifier: file.delete / file.rename / file.move');
+
+  await test('file.delete → file_gone verified:true when file does not exist', async () => {
+    const fakePath = path.join(LOCATION_MAP.jarvis, `gone-${Date.now()}.txt`);
+    // File genuinely doesn't exist — verified should be true
+    const cr = { intent: 'file.delete' };
+    const tr = { ok: true, data: { path: fakePath, deleted: true, sizeBytes: 100 } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'file_gone');
+    assert.ok(r.verified, 'file_gone should be verified:true when file is absent');
+  });
+
+  await test('file.delete → file_gone verified:false when file still exists', async () => {
+    const tmpName = `still-exists-${Date.now()}.txt`;
+    const tmpPath = path.join(LOCATION_MAP.jarvis, tmpName);
+    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
+    await fs.promises.writeFile(tmpPath, 'still here', 'utf8');
+    try {
+      const cr = { intent: 'file.delete' };
+      const tr = { ok: true, data: { path: tmpPath, deleted: true, sizeBytes: 10 } };
+      const r  = await verify(cr, tr);
+      assert.equal(r.method, 'file_gone');
+      assert.ok(!r.verified, 'file_gone should be verified:false if file still exists');
+    } finally {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    }
+  });
+
+  await test('file.rename → file_exists verified:true for newPath', async () => {
+    const tmpName = `rename-verify-${Date.now()}.txt`;
+    const tmpPath = path.join(LOCATION_MAP.jarvis, tmpName);
+    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
+    await fs.promises.writeFile(tmpPath, 'verifier test', 'utf8');
+    try {
+      const cr = { intent: 'file.rename' };
+      const tr = { ok: true, data: { oldPath: tmpPath + '.old', newPath: tmpPath, renamed: true } };
+      const r  = await verify(cr, tr);
+      assert.equal(r.method, 'file_exists');
+      assert.ok(r.verified, 'file_exists should be verified:true when newPath exists');
+    } finally {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    }
+  });
+
+  await test('file.move → file_exists verified:true for newPath', async () => {
+    const tmpName = `move-verify-${Date.now()}.txt`;
+    const tmpPath = path.join(LOCATION_MAP.jarvis, tmpName);
+    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
+    await fs.promises.writeFile(tmpPath, 'verifier test', 'utf8');
+    try {
+      const cr = { intent: 'file.move' };
+      const tr = { ok: true, data: { oldPath: tmpPath + '.old', newPath: tmpPath, moved: true } };
+      const r  = await verify(cr, tr);
+      assert.equal(r.method, 'file_exists');
+      assert.ok(r.verified, 'file_exists should be verified:true when newPath exists');
+    } finally {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    }
+  });
+
+  await test('file.delete tool failure → skipped', async () => {
+    const cr = { intent: 'file.delete' };
+    const tr = { ok: false, error: 'File not found' };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'skipped');
+    assert.ok(!r.verified);
+  });
+}
+
 // ─── Run all suites ───────────────────────────────────────────────────────────
 
 (async () => {
   console.log('\n╔══════════════════════════════════════════════════════════════════════════╗');
-  console.log('║  Jarvis — Phase 1 + Phase 2 + Phase 3 M3.3 Tier A Tests                 ║');
+  console.log('║  Jarvis — Phase 1 + Phase 2 + Phase 3 M3.4 Tier A Tests                 ║');
   console.log('╚══════════════════════════════════════════════════════════════════════════╝');
 
   await runPathTests();
@@ -2157,6 +2650,7 @@ async function runM33FileSearchTests() {
   await runM31BrowserSiteTests();
   await runM32SystemTests();
   await runM33FileSearchTests();
+  await runM34DestructiveFileTests();
 
   console.log('\n─────────────────────────────────────');
   console.log(`Results: ${passed} passed, ${failed} failed`);
@@ -2165,6 +2659,6 @@ async function runM33FileSearchTests() {
     console.error('\nSome tests failed.');
     process.exit(1);
   } else {
-    console.log('\nAll tests passed. Phase 3 M3.3 complete.');
+    console.log('\nAll tests passed. Phase 3 M3.4 complete.');
   }
 })();

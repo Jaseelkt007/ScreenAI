@@ -94,6 +94,23 @@ async function verify(classifierResult, toolResult) {
           detail:   data.path ? `opened ${path.basename(data.path)}` : 'shell.openPath succeeded',
         };
 
+      case 'file.delete': {
+        const gone = !fs.existsSync(data.path);
+        return {
+          verified: gone,
+          method:   'file_gone',
+          detail:   gone
+            ? `"${path.basename(data.path)}" confirmed deleted`
+            : `"${path.basename(data.path)}" still exists after delete`,
+        };
+      }
+
+      case 'file.rename':
+        return verifyFileExists(data.newPath, 'file_exists');
+
+      case 'file.move':
+        return verifyFileExists(data.newPath, 'file_exists');
+
       case 'app.open':
         return {
           verified: toolResult.ok === true,

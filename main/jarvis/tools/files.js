@@ -372,7 +372,7 @@ function scoreFile(fileName, queryTokens, extension) {
  * @param {{ query?: string, extension?: string, locationHint?: string }} params
  * @returns {Promise<ToolResult>}
  */
-async function findFiles({ query, extension, locationHint } = {}) {
+async function findFiles({ query, extension, locationHint, _includeScores = false } = {}) {
   if (!query && !extension) {
     return { ok: false, error: 'No search query provided.', action: '' };
   }
@@ -477,7 +477,9 @@ $results | ConvertTo-Json -Depth 1
     return String(b.modifiedAt || '').localeCompare(String(a.modifiedAt || ''));
   });
 
-  const topMatches = scored.slice(0, 10).map(({ score, ...rest }) => rest);
+  const topMatches = scored.slice(0, 10).map(({ score, ...rest }) =>
+    _includeScores ? { ...rest, score } : rest
+  );
   const searchKey  = query || extension;
 
   if (topMatches.length === 0) {
@@ -552,6 +554,261 @@ async function openFile({ path: filePath }) {
   };
 }
 
+// ─── Known-folder path resolution (OneDrive-aware) ──────────────────────────
+
+/**
+ * Resolve a known folder hint to its real absolute path on disk.
+ *
+ * On Windows, Desktop and Documents may be redirected to OneDrive
+ * (e.g. C:\Users\user\OneDrive\Desktop). LOCATION_MAP uses os.homedir()
+ * which constructs the wrong path in that case. PowerShell's
+ * [System.Environment]::GetFolderPath() always returns the real path.
+ *
+ * jarvis and downloads are not typically OneDrive-backed, so we fall
+ * back to LOCATION_MAP for those.
+ *
+ * @param {string} hint — 'desktop' | 'documents' | 'downloads' | 'jarvis'
+ * @returns {Promise<string>} absolute directory path
+ */
+async function resolveKnownFolderPath(hint) {
+  const lower = (hint || 'jarvis').toLowerCase().trim();
+
+  // Jarvis workspace and Downloads are not typically OneDrive-backed —
+  // use direct LOCATION_MAP construction.
+  if (lower === 'jarvis' || lower === 'downloads') {
+    return LOCATION_MAP[lower] || LOCATION_MAP.jarvis;
+  }
+
+  // On non-Windows platforms use LOCATION_MAP directly.
+  if (process.platform !== 'win32') {
+    return LOCATION_MAP[lower] || LOCATION_MAP.jarvis;
+  }
+
+  // Desktop / Documents: ask PowerShell for the real shell folder path.
+  try {
+    const { runPS } = require('./ps-runner');
+    const folderConst = lower === 'desktop' ? 'Desktop' : 'MyDocuments';
+    const result = await runPS(`[System.Environment]::GetFolderPath('${folderConst}')`);
+    if (result.ok && result.stdout && result.stdout.trim()) {
+      return result.stdout.trim();
+    }
+  } catch (e) {
+    console.warn(`[resolveKnownFolderPath] PS call failed for "${lower}":`, e.message);
+  }
+
+  // Fallback to LOCATION_MAP if PS call fails.
+  return LOCATION_MAP[lower] || LOCATION_MAP.jarvis;
+}
+
+// ─── Destructive file operations ─────────────────────────────────────────────
+//
+// All three functions accept { path: absolutePath } as the PRIMARY input.
+// The dispatcher resolves the real path via findFiles (OneDrive-aware) and
+// passes it here. The { name, locationHint } fallback is kept for Tier A
+// unit tests that create files directly in the Jarvis workspace.
+
+/**
+ * Delete a file. Path must be within HOME.
+ *
+ * Primary:  { path: string }            — absolute path already resolved by dispatcher
+ * Fallback: { name: string, locationHint?: string } — direct resolution (Tier A tests only)
+ *
+ * @param {{ path?: string, name?: string, locationHint?: string }} params
+ * @returns {Promise<ToolResult>}
+ */
+async function deleteFile({ path: absolutePath, name, locationHint }) {
+  let absPath = absolutePath;
+
+  if (!absPath) {
+    // Fallback: direct path construction (Tier A tests / Jarvis workspace)
+    const resolved = resolveJarvisPath(name, locationHint);
+    if (!resolved.ok) return { ok: false, error: resolved.error, action: '' };
+    absPath = resolved.absPath;
+  }
+
+  // Safety: must be within HOME regardless of how path was obtained
+  if (!absPath.startsWith(HOME + path.sep) && absPath !== HOME) {
+    return { ok: false, error: 'Path outside home directory is not allowed.', action: '' };
+  }
+
+  console.log(`[deleteFile] resolved absPath: ${absPath}`);
+  console.log(`[deleteFile] exists: ${fs.existsSync(absPath)}`);
+
+  if (!fs.existsSync(absPath)) {
+    return {
+      ok:     false,
+      error:  `File not found at resolved path: "${absPath}". This usually means the file was moved or the path was incorrect.`,
+      action: '',
+    };
+  }
+
+  const stat = await fs.promises.stat(absPath);
+  const sizeBytes = stat.size;
+
+  await fs.promises.unlink(absPath);
+  console.log(`[deleteFile] unlinked successfully: ${absPath}`);
+
+  return {
+    ok:     true,
+    data:   { path: absPath, sizeBytes, deleted: true },
+    action: `Deleted "${path.basename(absPath)}" (${sizeBytes} bytes).`,
+  };
+}
+
+/**
+ * Rename a file within the same directory. Cross-directory rename is rejected.
+ * New name must not contain path separators.
+ *
+ * Primary:  { path: string, newName: string }
+ * Fallback: { name: string, newName: string, locationHint?: string }
+ *
+ * @param {{ path?: string, name?: string, newName: string, locationHint?: string }} params
+ * @returns {Promise<ToolResult>}
+ */
+async function renameFile({ path: absolutePath, name, newName, locationHint }) {
+  if (!newName) return { ok: false, error: 'No new filename provided.', action: '' };
+
+  // Block path separators in new name — rename within same directory only
+  if (/[/\\]/.test(newName)) {
+    return { ok: false, error: 'New filename must not contain path separators. To move a file use "move".', action: '' };
+  }
+
+  let absPath = absolutePath;
+
+  if (!absPath) {
+    const resolved = resolveJarvisPath(name, locationHint);
+    if (!resolved.ok) return { ok: false, error: resolved.error, action: '' };
+    absPath = resolved.absPath;
+  }
+
+  // Safety: must be within HOME
+  if (!absPath.startsWith(HOME + path.sep) && absPath !== HOME) {
+    return { ok: false, error: 'Path outside home directory is not allowed.', action: '' };
+  }
+
+  console.log(`[renameFile] resolved absPath: ${absPath}`);
+  console.log(`[renameFile] exists: ${fs.existsSync(absPath)}`);
+
+  if (!fs.existsSync(absPath)) {
+    return {
+      ok:     false,
+      error:  `File not found at resolved path: "${absPath}".`,
+      action: '',
+    };
+  }
+
+  const newNameSanitized = newName.trim();
+  if (!newNameSanitized || /[*?<>|":\x00]/.test(newNameSanitized)) {
+    return { ok: false, error: `Invalid new filename: "${newName}"`, action: '' };
+  }
+
+  // Auto-preserve source extension if the new name has none — prevents accidental
+  // extension stripping when user says "rename notes.txt to journal" (spoken without extension).
+  const srcExt = path.extname(absPath);
+  const dstExt = path.extname(newNameSanitized);
+  let finalNewName = newNameSanitized;
+  if (srcExt && !dstExt) {
+    finalNewName = newNameSanitized + srcExt;
+    console.log(`[renameFile] extension preserved: "${newNameSanitized}" + "${srcExt}" → "${finalNewName}"`);
+  }
+
+  const baseDir    = path.dirname(absPath);
+  const newAbsPath = path.join(baseDir, finalNewName);
+
+  if (absPath === newAbsPath) {
+    return { ok: false, error: 'New name is the same as the current name.', action: '' };
+  }
+
+  console.log(`[renameFile] renaming to: ${newAbsPath}`);
+  await fs.promises.rename(absPath, newAbsPath);
+
+  return {
+    ok:     true,
+    data:   { oldPath: absPath, newPath: newAbsPath, renamed: true },
+    action: `Renamed "${path.basename(absPath)}" to "${finalNewName}".`,
+  };
+}
+
+/**
+ * Move a file from its resolved location to a destination known-folder.
+ * Uses copy-then-delete for cross-filesystem safety.
+ * Rejects cross-drive moves and paths outside HOME.
+ *
+ * Primary:  { path: string, targetLocationHint: string }
+ * Fallback: { name: string, locationHint?: string, targetLocationHint: string }
+ *
+ * @param {{ path?: string, name?: string, locationHint?: string, targetLocationHint: string }} params
+ * @returns {Promise<ToolResult>}
+ */
+async function moveFile({ path: absolutePath, name, locationHint, targetLocationHint }) {
+  if (!targetLocationHint) {
+    return { ok: false, error: 'No destination location provided.', action: '' };
+  }
+
+  let srcPath = absolutePath;
+
+  if (!srcPath) {
+    const resolved = resolveJarvisPath(name, locationHint);
+    if (!resolved.ok) return { ok: false, error: resolved.error, action: '' };
+    srcPath = resolved.absPath;
+  }
+
+  // Safety: source must be within HOME
+  if (!srcPath.startsWith(HOME + path.sep) && srcPath !== HOME) {
+    return { ok: false, error: 'Source path outside home directory is not allowed.', action: '' };
+  }
+
+  // Resolve destination using OneDrive-aware known-folder lookup
+  const dstDir  = await resolveKnownFolderPath(targetLocationHint);
+  const dstPath = path.join(dstDir, path.basename(srcPath));
+
+  console.log(`[moveFile] srcPath: ${srcPath}`);
+  console.log(`[moveFile] dstDir: ${dstDir} (hint: ${targetLocationHint})`);
+  console.log(`[moveFile] dstPath: ${dstPath}`);
+
+  if (srcPath === dstPath) {
+    return { ok: false, error: 'Source and destination are the same location.', action: '' };
+  }
+
+  // Reject cross-drive moves (Windows: different drive letter roots)
+  const srcRoot = path.parse(srcPath).root;
+  const dstRoot = path.parse(dstPath).root;
+  if (srcRoot && dstRoot && srcRoot.toLowerCase() !== dstRoot.toLowerCase()) {
+    return { ok: false, error: 'I can only move files within your home directory (same drive).', action: '' };
+  }
+
+  // Safety: destination must also be within HOME (or at least within the resolved known folder)
+  const dstParent = path.resolve(dstDir);
+  if (!dstParent.startsWith(HOME + path.sep) && dstParent !== HOME) {
+    return { ok: false, error: 'Destination path outside home directory is not allowed.', action: '' };
+  }
+
+  console.log(`[moveFile] src exists: ${fs.existsSync(srcPath)}`);
+
+  if (!fs.existsSync(srcPath)) {
+    return {
+      ok:     false,
+      error:  `File not found at resolved path: "${srcPath}".`,
+      action: '',
+    };
+  }
+
+  // Ensure destination directory exists
+  await fs.promises.mkdir(dstDir, { recursive: true });
+
+  // Copy first — unlink source only on successful copy
+  await fs.promises.copyFile(srcPath, dstPath);
+  await fs.promises.unlink(srcPath);
+  console.log(`[moveFile] moved successfully: ${srcPath} → ${dstPath}`);
+
+  const targetLabel = friendlyDir(dstDir) || targetLocationHint;
+  return {
+    ok:     true,
+    data:   { oldPath: srcPath, newPath: dstPath, moved: true },
+    action: `Moved "${path.basename(srcPath)}" to ${targetLabel}.`,
+  };
+}
+
 module.exports = {
   createFile,
   readFile,
@@ -561,6 +818,9 @@ module.exports = {
   createDir,
   findFiles,
   openFile,
+  deleteFile,
+  renameFile,
+  moveFile,
   // Exported for tests
   resolveJarvisPath,
   LOCATION_MAP,

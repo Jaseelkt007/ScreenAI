@@ -16,6 +16,9 @@ const SUPPORTED_INTENTS = [
   'file.mkdir',
   'file.find',
   'file.open',
+  'file.delete',
+  'file.rename',
+  'file.move',
   'app.open',
   'app.close',
   'app.focus',
@@ -68,7 +71,9 @@ Do not return any text outside the JSON. Do not explain your reasoning.
     "level": "<for system.volume action='set': integer 0–100>",
     "query": "<for file.find: filename or keyword to search for>",
     "extension": "<for file.find: optional extension filter, e.g. 'pdf'>",
-    "name": "<for file.open: spoken filename or document alias, e.g. 'notes.txt' or 'cv'>"
+    "name": "<for file.open/delete/rename/move: spoken filename or document alias, e.g. 'notes.txt' or 'cv'>",
+    "newName": "<for file.rename: the new filename, e.g. 'journal.txt'>",
+    "targetLocationHint": "<for file.move: destination location keyword — 'documents' | 'desktop' | 'downloads' | 'jarvis'>"
   },
   "raw": "<the original transcript verbatim>",
   "needsConfirm": <true if the action needs confirmation, otherwise false>,
@@ -85,6 +90,9 @@ Do not return any text outside the JSON. Do not explain your reasoning.
 - file.mkdir       — create a new directory/folder
 - file.find        — search for files by name, keyword, or extension (e.g. "find my CV", "locate notes.txt")
 - file.open        — open a file with the default OS application (e.g. "open resume.pdf", "open my CV")
+- file.delete      — permanently delete a file (e.g. "delete notes.txt", "remove old-report.pdf") — always needsConfirm:true
+- file.rename      — rename a file within the same directory (e.g. "rename notes.txt to journal.txt") — always needsConfirm:true
+- file.move        — move a file to a different location (e.g. "move notes.txt to Desktop") — always needsConfirm:true
 - app.open         — open/launch an application by name
 - app.close        — close/quit a named application gracefully
 - app.focus        — focus/bring to foreground a named application
@@ -113,7 +121,7 @@ Do not return any text outside the JSON. Do not explain your reasoning.
 
 1. Only include params relevant to the chosen intent. Omit all others.
 2. "locationHint" defaults to "jarvis" (meaning ~/Documents/Jarvis/) if the user doesn't specify a location.
-3. "needsConfirm" is true for file.write, and for input.type when the typed text is long (80+ chars). Otherwise false.
+3. "needsConfirm" is true for file.write, file.delete, file.rename, and file.move (always). Also true for input.type when the typed text is long (80+ chars). Otherwise false.
 4. For system.unsupported, always include a "reason" field.
 5. Do not invent intents. Use only the list above.
 6. If the command references a file operation but you cannot extract the filename, use system.unsupported.
@@ -417,6 +425,33 @@ Transcript: "alt tab"
   "needsConfirm": false
 }
 
+Transcript: "delete notes.txt"
+{
+  "intent": "file.delete",
+  "confidence": "llm",
+  "params": { "name": "notes.txt", "locationHint": "jarvis" },
+  "raw": "delete notes.txt",
+  "needsConfirm": true
+}
+
+Transcript: "rename notes.txt to journal.txt"
+{
+  "intent": "file.rename",
+  "confidence": "llm",
+  "params": { "name": "notes.txt", "newName": "journal.txt", "locationHint": "jarvis" },
+  "raw": "rename notes.txt to journal.txt",
+  "needsConfirm": true
+}
+
+Transcript: "move notes.txt to Desktop"
+{
+  "intent": "file.move",
+  "confidence": "llm",
+  "params": { "name": "notes.txt", "locationHint": "jarvis", "targetLocationHint": "desktop" },
+  "raw": "move notes.txt to Desktop",
+  "needsConfirm": true
+}
+
 Transcript: "delete all my files"
 {
   "intent": "system.unsupported",
@@ -424,7 +459,7 @@ Transcript: "delete all my files"
   "params": {},
   "raw": "delete all my files",
   "needsConfirm": false,
-  "reason": "File deletion is not supported."
+  "reason": "Bulk file deletion is not supported — please specify an exact filename."
 }
 
 Transcript: "mute"

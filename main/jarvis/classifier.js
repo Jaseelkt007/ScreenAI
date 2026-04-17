@@ -163,6 +163,41 @@ const PATTERN_TABLE = [
     }),
   },
 
+  // ── file.delete ──
+  {
+    intent:  'file.delete',
+    pattern: /\b(delete|remove|erase|trash)\b.{0,50}\b(file|document|[\w.-]*\.(txt|pdf|docx|md|json|csv|xlsx|png|jpg|jpeg|log|html|pptx|mp4|zip))\b/i,
+    extract: (m, t) => ({
+      name:         normalizeSpokenFilename(extractFilenameWithExtExpanded(t) || extractName(t) || extractDeleteTarget(t)),
+      locationHint: extractLocation(t),
+    }),
+    needsConfirm: true,
+  },
+
+  // ── file.rename ──
+  {
+    intent:  'file.rename',
+    pattern: /\b(rename|call it|name it|rename\s+(?:the\s+|this\s+)?file)\b.{0,60}\bto\b/i,
+    extract: (m, t) => ({
+      name:         extractFilenameFromPhrase(t, 'before_to'),
+      newName:      extractFilenameFromPhrase(t, 'after_to'),
+      locationHint: extractLocation(t),
+    }),
+    needsConfirm: true,
+  },
+
+  // ── file.move ──
+  {
+    intent:  'file.move',
+    pattern: /\b(move|transfer|put)\b.{0,50}[\w.-]+.{0,20}\b(to|into)\b.{0,30}\b(documents|desktop|downloads|jarvis)\b/i,
+    extract: (m, t) => ({
+      name:               normalizeSpokenFilename(extractFilenameWithExtExpanded(t) || extractName(t) || extractMoveTarget(t)),
+      locationHint:       extractLocation(t),
+      targetLocationHint: extractTargetLocation(t),
+    }),
+    needsConfirm: true,
+  },
+
   // ── app.close — before app.open to prevent "close" being caught by open/read patterns ──
   // Pattern is built dynamically from APP_NAMES so adding an app there updates this too.
   {
@@ -423,7 +458,9 @@ const COMPILED = PATTERN_TABLE.map((rule) => ({
 // File-context verbs that justify normalising spoken punctuation ("underscore",
 // "dot pdf"). Only when one of these verbs is present do we rewrite the
 // transcript — keeps unrelated commands ("type the word underscore") untouched.
-const FILE_CONTEXT_RE = /\b(open|show|load|launch|read|display|find|locate|search\s+for|look\s+for|where'?s|where\s+is)\b/i;
+// Destructive verbs (delete/rename/move) are included so "delete hello dot txt"
+// and "rename notes dot txt to journal dot txt" are normalized before extraction.
+const FILE_CONTEXT_RE = /\b(open|show|load|launch|read|display|find|locate|search\s+for|look\s+for|where'?s|where\s+is|delete|remove|erase|trash|rename|move|transfer)\b/i;
 
 async function classify(transcript, llmFn) {
   // Strip trailing punctuation that STT frequently appends ("Can you open Spotify?")
@@ -850,6 +887,96 @@ function extractDocumentAlias(t) {
     .replace(/\s+(please|now|for\s+me)$/i, '')
     .trim();
   return s || null;
+}
+
+// ─── M3.4 extraction helpers ─────────────────────────────────────────────────
+
+/**
+ * Normalize a spoken filename to a real filename:
+ *   - "underscore" → "_", "hyphen"/"dash" → "-"
+ *   - "dot txt" → ".txt"
+ *   - trailing bare extension word: "hello PDF" → "hello.pdf"
+ *
+ * Applied to both source and destination names in destructive ops so that
+ * "rename hello dot txt to journal PDF" extracts "hello.txt" and "journal.pdf".
+ */
+function normalizeSpokenFilename(s) {
+  if (!s) return s;
+  let n = s.trim()
+    .replace(/\s*\bunderscore\b\s*/gi, '_')
+    .replace(/\s*\bhyphen\b\s*/gi, '-')
+    .replace(/(\w)\s+dash\s+(\w)/gi, '$1-$2')
+    .replace(/\s*\bdot\s+([a-z]{2,5})\b/gi, '.$1');
+  // Trailing bare extension word "hello pdf" → "hello.pdf" (only when no extension yet)
+  if (!/\.[a-z0-9]{2,5}$/i.test(n)) {
+    n = n.replace(/\s+(pdf|docx?|xlsx?|pptx?|txt|md|json|csv|png|jpe?g|mp4|zip|log|html|js|py)\s*$/i,
+      (_, ext) => '.' + ext.toLowerCase());
+  }
+  return n.trim();
+}
+
+/**
+ * Extract a bare filename target from "delete notes.txt" when no "file" keyword
+ * is present — grabs the last whitespace-delimited token that looks like a filename.
+ */
+function extractDeleteTarget(t) {
+  // Strip leading verb
+  const s = t.replace(/^\s*(delete|remove|erase|trash)\s+/i, '').trim();
+  // If result looks like a filename, return it
+  if (/^[\w.-]+$/.test(s)) return s;
+  return null;
+}
+
+/**
+ * Extract the target filename from a file.move command: the token after the
+ * verb and before any "to/into <location>" phrase.
+ */
+function extractMoveTarget(t) {
+  const m = t.match(/\b(?:move|transfer|put)\s+([\w.-]+)\b/i);
+  return m ? m[1] : null;
+}
+
+/**
+ * Split a rename transcript on the first "to" that separates old and new names.
+ * "rename notes.txt to journal.txt"  → before_to="notes.txt", after_to="journal.txt"
+ * "rename my report to new-report"  → before_to="my report", after_to="new-report"
+ *
+ * @param {string} t          — full transcript
+ * @param {'before_to'|'after_to'} side
+ * @returns {string|null}
+ */
+function extractFilenameFromPhrase(t, side) {
+  // Strip leading rename verb phrase
+  let s = t.replace(/^\s*(?:rename|call it|name it|rename\s+(?:the\s+|this\s+)?file)\s*/i, '').trim();
+
+  // Split on first standalone " to " (not "to Documents" etc. — those come after)
+  const toIdx = s.search(/\s+to\s+/i);
+  if (toIdx === -1) return null;
+
+  const before = normalizeSpokenFilename(s.slice(0, toIdx).trim());
+  const after  = normalizeSpokenFilename(
+    s.slice(toIdx).replace(/^\s+to\s+/i, '').trim()
+      // Strip trailing location hints from the "after" part
+      .replace(/\s+(?:in|on|at|from|inside)\s+(?:documents|desktop|downloads|jarvis)\b.*/i, '')
+      .trim()
+  );
+
+  if (side === 'before_to') return before || null;
+  if (side === 'after_to')  return after  || null;
+  return null;
+}
+
+/**
+ * Extract the TARGET location from a move command — the location that appears
+ * AFTER "to" or "into" in the transcript.
+ * e.g. "move notes.txt to Desktop" → "desktop"
+ */
+function extractTargetLocation(t) {
+  const lower = t.toLowerCase();
+  // Find "to" or "into" then look for a location keyword after it
+  const m = lower.match(/\b(?:to|into)\b.{0,30}\b(documents|desktop|downloads|jarvis)\b/i);
+  if (m) return m[1].toLowerCase();
+  return undefined;
 }
 
 /**
