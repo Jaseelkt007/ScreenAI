@@ -32,7 +32,11 @@ const APP_NAMES = {
   'telegram':  { processName: 'Telegram',          exe: 'Telegram.exe' },
   'obs':       { processName: 'obs64',             exe: 'obs64.exe' },
   'paint':     { processName: 'mspaint',           exe: 'mspaint.exe' },
-  'notepad++': { processName: 'notepad++',         exe: 'notepad++.exe' },
+  'notepad++':   { processName: 'notepad++',         exe: 'notepad++.exe' },
+  'calculator':  { processName: 'Calculator',        exe: 'calc.exe' },
+  'calc':        { processName: 'Calculator',        exe: 'calc.exe' },
+  'powershell':  { processName: 'powershell',        exe: 'powershell.exe' },
+  'obs studio':  { processName: 'obs64',             exe: 'obs64.exe' },
 };
 
 /** Set of known browser process names (lowercase). Used by isBrowserFocused(). */

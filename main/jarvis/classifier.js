@@ -117,11 +117,49 @@ const PATTERN_TABLE = [
   },
 
   // ── file.list ──
+  // Second alternative added in Phase 3: "find ... folder/directory" also routes here
+  // so "find my documents folder" → file.list instead of file.find.
   {
     intent:  'file.list',
-    pattern: /\b(list|show|display|what'?s?\s+in|what is in)\b.{0,50}\b(folder|directory|documents|desktop|downloads|jarvis)\b/i,
+    pattern: /\b(list|show|display|what'?s?\s+in|what is in)\b.{0,50}\b(folder|directory|documents|desktop|downloads|jarvis)\b|\b(find|locate)\b.{0,50}\b(folder|directory)\b/i,
     extract: (m, t) => ({
       dirHint: extractLocation(t) || 'jarvis',
+    }),
+  },
+
+  // ── file.read (read filename.ext — without "file" keyword) — Phase 3 additive ──
+  // Handles "read notes.txt" which the existing file.read pattern misses (no "file/document/content/text").
+  // Placed before file.find so "read" + extension → file.read, not file.open.
+  {
+    intent:  'file.read',
+    pattern: /\bread\b.{0,30}[\w\s.-]+\.(txt|pdf|docx|xlsx|pptx|md|json|csv|log|html|js|py|png|jpg|jpeg)\b/i,
+    extract: (m, t) => ({
+      name:         extractFilenameWithExtExpanded(t) || extractName(t) || '',
+      locationHint: extractLocation(t),
+    }),
+  },
+
+  // ── file.find (keyword search) ──
+  // Must be placed AFTER file.list so "find ... folder" routes to file.list first.
+  // Secondary keyword list includes location words (desktop/documents/downloads) and
+  // common document nouns so "find resume on desktop" and "find cover letter" both match.
+  {
+    intent:  'file.find',
+    pattern: /\b(find|locate|search for|look for|where is|where'?s)\b.{0,50}\b(file|document|doc|pdf|image|photo|video|spreadsheet|my|the|desktop|documents|downloads|jarvis|resume|cv|letter|report|notes|invoice|contract|budget|presentation|thesis|slides|receipt|agreement)\b/i,
+    extract: (m, t) => ({
+      query:        extractFindQuery(t),
+      extension:    extractExtension(t),
+      locationHint: extractLocation(t),
+    }),
+  },
+
+  // ── file.find (with file extension in transcript) ──
+  {
+    intent:  'file.find',
+    pattern: /\b(find|locate|where is|where'?s)\b.{0,40}[\w\s-]+\.(txt|pdf|docx|xlsx|pptx|png|jpg|jpeg|mp4|md|json|csv|zip)\b/i,
+    extract: (m, t) => ({
+      query:        extractFilenameWithExtExpanded(t),
+      locationHint: extractLocation(t),
     }),
   },
 
@@ -185,12 +223,34 @@ const PATTERN_TABLE = [
     }),
   },
 
-  // ── app.open ──
+  // ── app.open — pattern built from APP_NAMES_ALTS so new apps auto-register ──
   {
     intent:  'app.open',
-    pattern: /\b(open|launch|start|run)\b.{0,30}\b(chrome|firefox|edge|safari|notepad|calculator|calc|vscode|vs code|visual studio code|code|word|excel|powerpoint|spotify|slack|teams|terminal|cmd|command prompt|powershell|paint|explorer|file explorer)\b/i,
+    pattern: new RegExp(`\\b(open|launch|start|run)\\b.{0,30}\\b(${APP_NAMES_ALTS})\\b`, 'i'),
     extract: (m, t) => ({
-      appName: extractAppName(t),
+      appName: extractTargetAppName(t) || extractAppName(t),
+    }),
+  },
+
+  // ── file.open (with file extension) ──
+  // Must come AFTER app.open — app.open uses APP_NAMES_ALTS which won't match filenames.
+  // Must come AFTER file.read so "read notes.txt" hits file.read first.
+  {
+    intent:  'file.open',
+    pattern: /\b(open|show|load|launch|read|display)\b.{0,50}[\w\s-]+\.(txt|pdf|docx|xlsx|pptx|png|jpg|jpeg|mp4|md|json|csv|zip)\b/i,
+    extract: (m, t) => ({
+      name:         extractFilenameWithExtExpanded(t),
+      locationHint: extractLocation(t),
+    }),
+  },
+
+  // ── file.open (document alias: "open my CV", "show my resume") ──
+  {
+    intent:  'file.open',
+    pattern: /\b(open|show|load|display)\b.{0,20}\b(my\s+)?(cv|resume|thesis|portfolio|report|presentation|budget|invoice|contract)\b/i,
+    extract: (m, t) => ({
+      name:         extractDocumentAlias(t),
+      locationHint: extractLocation(t),
     }),
   },
 
@@ -263,6 +323,22 @@ const PATTERN_TABLE = [
     pattern: /\b(go to|navigate to|visit|open)\b.{0,40}\b[\w-]+\.(com|org|net|io|co|app|dev|edu|gov)\b/i,
     extract: (m, t) => ({
       url: extractUrl(t),
+    }),
+  },
+
+  // ── file.find (short-phrase fallback) — placed just before browser.search ──
+  // Catches bare "find <noun>" / "locate <noun>" that lacked any keyword cue above.
+  // "find resume Jaseel", "find cover letter", "find second_regression.txt" all land here.
+  // The ^ anchor + 30-char cap keep it constrained to short filename-style queries.
+  // First neg-lookahead: blocks web-search openers ("a ", "me ", "out" etc.).
+  // Second neg-lookahead: blocks web-signal words anywhere in the phrase.
+  {
+    intent:  'file.find',
+    pattern: /^\s*(?:find|locate)\s+(?!(?:a\s|me\s|the\s+best\s|out\b|if\b|how\b|what\b|when\b|where\b|who\b))(?![\w\s]{0,25}\b(?:near|around|online|weather|news|flights?|hotels?|restaurants?|recipes?|directions?)\b)[\w][\w\s._-]{1,30}\s*$/i,
+    extract: (m, t) => ({
+      query:        extractFindQuery(t),
+      extension:    extractExtension(t),
+      locationHint: extractLocation(t),
     }),
   },
 
@@ -344,12 +420,28 @@ const COMPILED = PATTERN_TABLE.map((rule) => ({
  *                               In Tier A tests, pass a stub that returns a fixed result.
  * @returns {Promise<ClassifierResult>}
  */
+// File-context verbs that justify normalising spoken punctuation ("underscore",
+// "dot pdf"). Only when one of these verbs is present do we rewrite the
+// transcript — keeps unrelated commands ("type the word underscore") untouched.
+const FILE_CONTEXT_RE = /\b(open|show|load|launch|read|display|find|locate|search\s+for|look\s+for|where'?s|where\s+is)\b/i;
+
 async function classify(transcript, llmFn) {
   // Strip trailing punctuation that STT frequently appends ("Can you open Spotify?")
   // The ? breaks regex $ anchors and causes param extraction to return empty string.
-  const t = (transcript || '').trim().replace(/[?.!,…]+$/, '').trim();
-  if (!t) {
-    return unsupported(t, 'Empty transcript.');
+  const rawInput = (transcript || '').trim().replace(/[?.!,…]+$/, '').trim();
+  if (!rawInput) {
+    return unsupported(rawInput, 'Empty transcript.');
+  }
+
+  // Spoken punctuation normalisation — only inside a file-command context so
+  // "find resume underscore Jaseel dot pdf" becomes "find resume_Jaseel.pdf".
+  let t = rawInput;
+  if (FILE_CONTEXT_RE.test(t)) {
+    t = t
+      .replace(/\s*\bunderscore\b\s*/gi, '_')
+      .replace(/\s*\bhyphen\b\s*/gi, '-')
+      .replace(/(\w)\s+dash\s+(\w)/gi, '$1-$2')
+      .replace(/\s*\bdot\s+([a-z]{2,5})\b/gi, '.$1');
   }
 
   // ── Tier 1: pattern match ──
@@ -362,7 +454,7 @@ async function classify(transcript, llmFn) {
         intent:       rule.intent,
         confidence:   'pattern',
         params,
-        raw:          t,
+        raw:          rawInput,
         needsConfirm: rule.needsConfirm === true || inferNeedsConfirm(rule.intent, params),
       };
     }
@@ -373,7 +465,7 @@ async function classify(transcript, llmFn) {
   const apiKey     = settings.getApiKey();
 
   if (!llmEnabled || !apiKey) {
-    return unsupported(t, 'Command not recognised. Try rephrasing.');
+    return unsupported(rawInput, 'Command not recognised. Try rephrasing.');
   }
 
   const callLlm = llmFn || geminiLlmFallback;
@@ -383,7 +475,7 @@ async function classify(transcript, llmFn) {
     return result;
   } catch (err) {
     console.warn('[classifier] LLM fallback failed:', err.message);
-    return unsupported(t, 'Command not recognised. Try rephrasing.');
+    return unsupported(rawInput, 'Command not recognised. Try rephrasing.');
   }
 }
 
@@ -391,7 +483,7 @@ async function classify(transcript, llmFn) {
 
 async function geminiLlmFallback(transcript, apiKey) {
   const fetch = (await import('node-fetch')).default;
-  const model = 'gemini-2.5-flash-preview-04-17';
+  const model = settings.getGeminiModel ? settings.getGeminiModel() : 'gemini-2.5-flash';
   const url   = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
   const body = {
@@ -709,6 +801,55 @@ function extractSiteName(t) {
   s = s.replace(/\s+(website|web|page|site)$/, '');
 
   return s.trim();
+}
+
+// ─── M3.3 extraction helpers ─────────────────────────────────────────────────
+
+/** Extract a filename with the expanded extension set used by file.find and file.open. */
+function extractFilenameWithExtExpanded(t) {
+  const m = t.match(/\b([\w.-]+\.(txt|pdf|docx|xlsx|pptx|png|jpg|jpeg|mp4|md|json|csv|zip|log|html|js|py))\b/i);
+  return m ? m[1] : null;
+}
+
+/**
+ * Extract the file extension keyword from a transcript.
+ * e.g. "find PDF files" → "pdf", "find my jpg images" → "jpg"
+ */
+function extractExtension(t) {
+  const m = t.toLowerCase().match(/\b(pdf|docx|xlsx|pptx|txt|md|json|csv|png|jpg|jpeg|mp4|zip|log|html|js|py)\b/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Extract the search query from a file.find command.
+ * Strips trigger verbs, articles, possessives, and trailing location hints.
+ * Preserves the full remainder (multi-word queries flow into findFiles
+ * where they are tokenized and scored).
+ */
+function extractFindQuery(t) {
+  let s = t
+    .replace(/\b(find|locate|search\s+for|look\s+for|where\s+is|where'?s)\b\s*/i, '')
+    .replace(/^\s*(my|the|a|an)\s+/i, '')
+    .replace(/\s+\b(in|on|at|from|inside)\s+(documents|desktop|downloads|jarvis)\b.*$/i, '')
+    .replace(/\s+\b(files?|documents?|docs?)\b$/i, '')
+    .trim();
+  return s || null;
+}
+
+/**
+ * Extract the spoken name for a file.open command with a document alias.
+ * Returns the full remainder so phrases like "open my resume Jaseel" keep
+ * the "jaseel" token for findFiles ranking. Single-word aliases still
+ * collapse to just the alias ("open my CV" → "cv").
+ */
+function extractDocumentAlias(t) {
+  let s = t.toLowerCase()
+    .replace(/\b(open|show|load|display|launch|read)\b\s*/i, '')
+    .replace(/^\s*(my|the|a|an)\s+/i, '')
+    .replace(/\s+\b(in|on|at|from|inside)\s+(documents|desktop|downloads|jarvis)\b.*$/i, '')
+    .replace(/\s+(please|now|for\s+me)$/i, '')
+    .trim();
+  return s || null;
 }
 
 /**

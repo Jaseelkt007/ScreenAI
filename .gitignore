@@ -34,6 +34,9 @@ codex-skills/
 .cache/
 buildResources/
 .claude/
-
+phase_1.md
+phase_2.md
 # Duplicate/backup icon files (source icon should be icon.png)
 icon (*).png
+.agents/
+skills-lock.json

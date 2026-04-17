@@ -21,7 +21,8 @@ const os       = require('os');
 const assert   = require('assert').strict;
 
 // Modules under test (pure Node — no Electron dependency)
-const { resolveJarvisPath, createFile, readFile, writeFile, appendFile, listDir, createDir, LOCATION_MAP } = require('./tools/files');
+const files = require('./tools/files');
+const { resolveJarvisPath, createFile, readFile, writeFile, appendFile, listDir, createDir, LOCATION_MAP } = files;
 const { classify }  = require('./classifier');
 const { dispatch }  = require('./dispatcher');
 const { verify }    = require('./verifier');
@@ -1701,11 +1702,445 @@ async function runM32SystemTests() {
   });
 }
 
+// ─── 14. Phase 3 M3.3 — Suite 11: file.find + file.open ─────────────────────
+
+async function runM33FileSearchTests() {
+  section('14. M3.3 — Suite 11: file.find and file.open classifier');
+
+  const { findFiles, openFile } = require('./tools/files');
+
+  // ── file.find: classifier intent detection ──
+  const findCases = [
+    { t: 'find my CV',                           intent: 'file.find', q: 'cv' },
+    { t: 'locate my resume',                     intent: 'file.find', q: 'resume' },
+    { t: 'where is my thesis',                   intent: 'file.find', q: 'thesis' },
+    { t: 'search for budget spreadsheet',        intent: 'file.find', q: 'budget' },
+    { t: 'look for the invoice document',        intent: 'file.find', q: 'invoice' },
+  ];
+
+  for (const { t, intent, q } of findCases) {
+    await test(`"${t}" → ${intent}`, async () => {
+      const r = await classify(t, LLM_NEVER_CALLED);
+      assert.equal(r.intent, intent, `Got "${r.intent}"`);
+      assert.equal(r.confidence, 'pattern');
+      if (q) assert.ok(r.params.query && r.params.query.toLowerCase().includes(q), `query "${r.params.query}" should include "${q}"`);
+      assert.equal(r.needsConfirm, false);
+    });
+  }
+
+  // ── file.find: with extension ──
+  await test('"find notes.txt" → file.find, query contains notes.txt', async () => {
+    const r = await classify('find notes.txt', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.find', `Got "${r.intent}"`);
+    assert.ok(r.params.query && r.params.query.toLowerCase().includes('notes'), `query: "${r.params.query}"`);
+  });
+
+  await test('"find notes.txt in Documents" → file.find, locationHint: documents', async () => {
+    const r = await classify('find notes.txt in Documents', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.find', `Got "${r.intent}"`);
+    assert.equal(r.params.locationHint, 'documents');
+  });
+
+  await test('"find PDF files" → file.find, extension: pdf', async () => {
+    const r = await classify('find PDF files', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.find', `Got "${r.intent}"`);
+    assert.equal(r.params.extension, 'pdf', `extension: "${r.params.extension}"`);
+  });
+
+  // ── file.open: classifier intent detection ──
+  await test('"open notes.txt" → file.open, name: notes.txt', async () => {
+    const r = await classify('open notes.txt', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.open', `Got "${r.intent}"`);
+    assert.equal(r.params.name, 'notes.txt', `name: "${r.params.name}"`);
+    assert.equal(r.needsConfirm, false);
+  });
+
+  await test('"open my resume.pdf" → file.open, name: resume.pdf', async () => {
+    const r = await classify('open my resume.pdf', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.open', `Got "${r.intent}"`);
+    assert.ok(r.params.name && r.params.name.toLowerCase().includes('resume'), `name: "${r.params.name}"`);
+  });
+
+  await test('"show budget.xlsx" → file.open', async () => {
+    const r = await classify('show budget.xlsx', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.open', `Got "${r.intent}"`);
+    assert.ok(r.params.name && r.params.name.toLowerCase().includes('budget'));
+  });
+
+  await test('"open my CV" → file.open, name alias: cv', async () => {
+    const r = await classify('open my CV', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.open', `Got "${r.intent}"`);
+    assert.equal(r.params.name, 'cv', `name: "${r.params.name}"`);
+  });
+
+  await test('"load my presentation" → file.open, name: presentation', async () => {
+    const r = await classify('load my presentation', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.open', `Got "${r.intent}"`);
+    assert.equal(r.params.name, 'presentation');
+  });
+
+  await test('"show my resume" → file.open, name: resume', async () => {
+    const r = await classify('show my resume', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.open', `Got "${r.intent}"`);
+    assert.equal(r.params.name, 'resume');
+  });
+
+  // ── Collision tests ──
+  await test('COLLISION: "open Chrome" → app.open (NOT file.open)', async () => {
+    const r = await classify('open Chrome', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'app.open', `Got "${r.intent}" — app.open must fire before file.open`);
+  });
+
+  await test('COLLISION: "read notes.txt" → file.read (NOT file.open)', async () => {
+    const r = await classify('read notes.txt', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.read', `Got "${r.intent}" — file.read must fire before file.open`);
+  });
+
+  await test('COLLISION: "find my documents folder" → file.list (NOT file.find)', async () => {
+    const r = await classify('find my documents folder', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.list', `Got "${r.intent}" — "folder" keyword must route to file.list`);
+  });
+
+  await test('COLLISION: "list my documents folder" → file.list (NOT file.find)', async () => {
+    const r = await classify('list my documents folder', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.list', `Got "${r.intent}"`);
+  });
+
+  // ── Dispatcher: file.find routing ──
+  section('14b. M3.3 — Dispatcher: file.find + file.open routing');
+
+  await test('file.find missing query → DispatchError', async () => {
+    const cr = { intent: 'file.find', params: {}, needsConfirm: false };
+    try {
+      await dispatch(cr);
+      assert.fail('should have thrown DispatchError');
+    } catch (err) {
+      assert.equal(err.name, 'DispatchError', `Expected DispatchError, got: ${err.name}`);
+    }
+  });
+
+  await test('file.find with extension only → calls findFiles', async () => {
+    let called = false;
+    const orig = files.findFiles;
+    files.findFiles = async ({ query, extension }) => {
+      called = true;
+      assert.equal(query, undefined);
+      assert.equal(extension, 'pdf');
+      return { ok: false, error: 'No files found.', action: '' };
+    };
+    try {
+      const r = await dispatch({ intent: 'file.find', params: { extension: 'pdf' }, needsConfirm: false });
+      assert.ok(called, 'findFiles should have been called');
+    } finally {
+      files.findFiles = orig;
+    }
+  });
+
+  await test('file.open missing name and path → DispatchError', async () => {
+    const cr = { intent: 'file.open', params: {}, needsConfirm: false };
+    try {
+      await dispatch(cr);
+      assert.fail('should have thrown DispatchError');
+    } catch (err) {
+      assert.equal(err.name, 'DispatchError');
+    }
+  });
+
+  await test('file.open with name, findFiles returns no matches → ok:false', async () => {
+    const orig = files.findFiles;
+    files.findFiles = async () => ({ ok: false, error: 'No files matching...', action: '' });
+    try {
+      const r = await dispatch({ intent: 'file.open', params: { name: 'unknownxyz.txt' }, needsConfirm: false });
+      assert.ok(!r.ok, 'Should return ok:false when file not found');
+      assert.ok(r.error.includes('unknownxyz'), `error: ${r.error}`);
+    } finally {
+      files.findFiles = orig;
+    }
+  });
+
+  await test('file.open with name, findFiles returns match → calls openFile with top match path', async () => {
+    const origFind = files.findFiles;
+    const origOpen = files.openFile;
+    let openedPath = null;
+    files.findFiles = async () => ({
+      ok:     true,
+      data:   { matches: [{ name: 'notes.txt', path: `${os.homedir()}/Documents/Jarvis/notes.txt`, sizeBytes: 100, modifiedAt: '' }], searchedIn: 'Jarvis', query: 'notes' },
+      action: 'Found notes.txt.',
+    });
+    files.openFile = async ({ path: p }) => {
+      openedPath = p;
+      return { ok: true, data: { path: p, opened: true }, action: `Opened "notes.txt".` };
+    };
+    try {
+      const r = await dispatch({ intent: 'file.open', params: { name: 'notes.txt' }, needsConfirm: false });
+      assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
+      assert.ok(openedPath && openedPath.includes('notes.txt'), `openedPath: ${openedPath}`);
+    } finally {
+      files.findFiles = origFind;
+      files.openFile  = origOpen;
+    }
+  });
+
+  // ── Verifier: file.find and file.open ──
+  section('14c. M3.3 — Verifier: file.find + file.open');
+
+  await test('file.find with matches → search_ok verified:true', async () => {
+    const cr = { intent: 'file.find' };
+    const tr = { ok: true, data: { matches: [{ name: 'cv.pdf', path: `${os.homedir()}/Documents/cv.pdf` }], query: 'cv', searchedIn: 'Documents' } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'search_ok');
+    assert.ok(r.verified);
+    assert.ok(r.detail.includes('cv'));
+  });
+
+  await test('file.find with zero matches (ok:false) → skipped', async () => {
+    const cr = { intent: 'file.find' };
+    const tr = { ok: false, error: "No files matching 'xyz' found." };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'skipped');
+    assert.ok(!r.verified);
+  });
+
+  await test('file.open → open_ok verified:true', async () => {
+    const cr = { intent: 'file.open' };
+    const tr = { ok: true, data: { path: `${os.homedir()}/Documents/Jarvis/notes.txt`, opened: true } };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'open_ok');
+    assert.ok(r.verified);
+    assert.ok(r.detail.includes('notes.txt'));
+  });
+
+  await test('file.open tool failure → skipped', async () => {
+    const cr = { intent: 'file.open' };
+    const tr = { ok: false, error: 'File not found' };
+    const r  = await verify(cr, tr);
+    assert.equal(r.method, 'skipped');
+    assert.ok(!r.verified);
+  });
+
+  // ── findFiles safety: path outside HOME rejected ──
+  await test('findFiles: PS result with path outside HOME is filtered out', async () => {
+    // We can only test the pure-node parts of findFiles — the PS call returns results
+    // which are filtered. We test that openFile rejects external paths.
+    const r = await openFile({ path: '/etc/passwd' });
+    assert.ok(!r.ok, 'Should reject path outside home directory');
+    assert.ok(r.error.includes('outside home directory') || r.error.includes('requires Electron'), `error: ${r.error}`);
+  });
+
+  // ── Spoken-punctuation normalisation in classifier ──
+  section('14d. M3.3 — Spoken punctuation normalisation');
+
+  await test('"open resume underscore Jaseel dot pdf" → file.open with normalized name', async () => {
+    const r = await classify('open resume underscore Jaseel dot pdf', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.open', `Got "${r.intent}"`);
+    assert.ok(r.params.name && /resume_jaseel\.pdf/i.test(r.params.name), `name: "${r.params.name}"`);
+  });
+
+  await test('"find my resume underscore jaseel" → file.find with normalized query', async () => {
+    const r = await classify('find my resume underscore jaseel', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.find', `Got "${r.intent}"`);
+    assert.ok(r.params.query && /resume_jaseel/i.test(r.params.query), `query: "${r.params.query}"`);
+  });
+
+  await test('"open report hyphen q1 dot docx" → file.open with normalized ext', async () => {
+    const r = await classify('open report hyphen q1 dot docx', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.open');
+    assert.ok(r.params.name && /report-q1\.docx/i.test(r.params.name), `name: "${r.params.name}"`);
+  });
+
+  await test('non-file context ("type underscore") is NOT normalized', async () => {
+    const r = await classify('type underscore', LLM_NEVER_CALLED);
+    // should still land on input.type, and preserve "underscore" as spoken
+    assert.equal(r.intent, 'input.type', `Got "${r.intent}"`);
+  });
+
+  await test('normalization preserves original raw', async () => {
+    const r = await classify('find my resume underscore jaseel', LLM_NEVER_CALLED);
+    assert.ok(r.raw.includes('underscore'), `raw: "${r.raw}" — must preserve original transcript`);
+  });
+
+  await test('file.open alias keeps full context ("open my resume Jaseel")', async () => {
+    const r = await classify('open my resume Jaseel', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.open');
+    assert.ok(r.params.name && /jaseel/i.test(r.params.name), `name: "${r.params.name}" must retain "jaseel"`);
+  });
+
+  // ── tokenizeQuery / expandAliases / scoreFile unit tests ──
+  section('14e. M3.3 — tokenizeQuery / expandAliases / scoreFile');
+
+  const { tokenizeQuery, expandAliases, scoreFile } = require('./tools/files');
+
+  await test('tokenizeQuery: splits on whitespace/underscore/dash/dot', () => {
+    const r = tokenizeQuery('resume_jaseel foo-bar');
+    assert.deepEqual(r.tokens, ['resume', 'jaseel', 'foo', 'bar']);
+    assert.equal(r.extension, null);
+  });
+
+  await test('tokenizeQuery: extracts trailing .pdf', () => {
+    const r = tokenizeQuery('resume_jaseel.pdf');
+    assert.deepEqual(r.tokens, ['resume', 'jaseel']);
+    assert.equal(r.extension, 'pdf');
+  });
+
+  await test('tokenizeQuery: extracts trailing bare "pdf"', () => {
+    const r = tokenizeQuery('resume jaseel pdf');
+    assert.deepEqual(r.tokens, ['resume', 'jaseel']);
+    assert.equal(r.extension, 'pdf');
+  });
+
+  await test('tokenizeQuery: drops stop words', () => {
+    const r = tokenizeQuery('the resume document');
+    assert.deepEqual(r.tokens, ['resume']);
+  });
+
+  await test('tokenizeQuery: empty / null → empty tokens', () => {
+    assert.deepEqual(tokenizeQuery('').tokens, []);
+    assert.deepEqual(tokenizeQuery(null).tokens, []);
+  });
+
+  await test('expandAliases: cv expands to resume/curriculum/vitae', () => {
+    const r = expandAliases(['cv']);
+    assert.ok(r.includes('cv'));
+    assert.ok(r.includes('resume'));
+    assert.ok(r.includes('curriculum'));
+    assert.ok(r.includes('vitae'));
+  });
+
+  await test('expandAliases: resume expands symmetrically to cv', () => {
+    const r = expandAliases(['resume']);
+    assert.ok(r.includes('cv'));
+    assert.ok(r.includes('resume'));
+  });
+
+  await test('expandAliases: non-alias token passes through unchanged', () => {
+    const r = expandAliases(['jaseel']);
+    assert.deepEqual(r, ['jaseel']);
+  });
+
+  await test('scoreFile: exact token match scores 10', () => {
+    const s = scoreFile('resume_Jaseel.pdf', ['resume'], null);
+    assert.ok(s >= 10, `score: ${s}`);
+  });
+
+  await test('scoreFile: two exact tokens + matching ext → 22', () => {
+    const s = scoreFile('resume_Jaseel.pdf', ['resume', 'jaseel'], 'pdf');
+    assert.equal(s, 22);
+  });
+
+  await test('scoreFile: extension mismatch → 0', () => {
+    const s = scoreFile('resume_Jaseel.pdf', ['resume'], 'docx');
+    assert.equal(s, 0);
+  });
+
+  await test('scoreFile: substring-only match scores 5', () => {
+    const s = scoreFile('myresumefile.pdf', ['resume'], null);
+    assert.equal(s, 5);
+  });
+
+  await test('scoreFile: no match → 0', () => {
+    const s = scoreFile('notes.txt', ['resume'], null);
+    assert.equal(s, 0);
+  });
+
+  // ── End-to-end findFiles with mocked PowerShell ──
+  section('14f. M3.3 — findFiles end-to-end (mocked PS)');
+
+  // Build a fake PS JSON payload with resume_Jaseel.pdf on Desktop + a few decoys
+  const fakePsJson = JSON.stringify([
+    { Name: 'resume_Jaseel.pdf',    FullName: `${os.homedir()}/Desktop/resume_Jaseel.pdf`,  LastWriteTime: '2026-03-01T10:00:00Z', Length: 120000 },
+    { Name: 'resume_Jaseel.pdf',    FullName: `${os.homedir()}/Documents/resume_Jaseel.pdf`, LastWriteTime: '2026-02-01T10:00:00Z', Length: 120000 },
+    { Name: 'random_notes.txt',     FullName: `${os.homedir()}/Documents/random_notes.txt`, LastWriteTime: '2026-01-01T10:00:00Z', Length: 2048 },
+    { Name: 'budget_2025.xlsx',     FullName: `${os.homedir()}/Documents/budget_2025.xlsx`, LastWriteTime: '2025-12-01T10:00:00Z', Length: 8192 },
+    { Name: 'etc_passwd',           FullName: `/etc/passwd`,                                 LastWriteTime: '2026-01-01T10:00:00Z', Length: 2048 },
+  ]);
+
+  await test('findFiles("cv") matches resume_Jaseel.pdf via alias expansion', async () => {
+    await withPatchedExports('./tools/ps-runner', {
+      runPS: async () => ({ ok: true, stdout: fakePsJson, stderr: '' }),
+    }, async () => {
+      const r = await files.findFiles({ query: 'cv', locationHint: 'desktop' });
+      assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
+      assert.ok(r.data.matches.length >= 1);
+      assert.equal(r.data.matches[0].name, 'resume_Jaseel.pdf');
+      assert.ok(r.data.expandedTokens.includes('resume'));
+    });
+  });
+
+  await test('findFiles("resume jaseel pdf") ranks resume_Jaseel.pdf first', async () => {
+    await withPatchedExports('./tools/ps-runner', {
+      runPS: async () => ({ ok: true, stdout: fakePsJson, stderr: '' }),
+    }, async () => {
+      const r = await files.findFiles({ query: 'resume jaseel pdf' });
+      assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
+      assert.equal(r.data.matches[0].name, 'resume_Jaseel.pdf');
+      assert.equal(r.data.extension, 'pdf');
+    });
+  });
+
+  await test('findFiles("resume_Jaseel.pdf") returns exact match first', async () => {
+    await withPatchedExports('./tools/ps-runner', {
+      runPS: async () => ({ ok: true, stdout: fakePsJson, stderr: '' }),
+    }, async () => {
+      const r = await files.findFiles({ query: 'resume_Jaseel.pdf' });
+      assert.ok(r.ok);
+      assert.equal(r.data.matches[0].name, 'resume_Jaseel.pdf');
+    });
+  });
+
+  await test('findFiles filters out paths outside HOME (/etc/passwd)', async () => {
+    await withPatchedExports('./tools/ps-runner', {
+      runPS: async () => ({ ok: true, stdout: fakePsJson, stderr: '' }),
+    }, async () => {
+      const r = await files.findFiles({ query: 'passwd' });
+      if (r.ok) {
+        for (const m of r.data.matches) {
+          assert.ok(!m.path.startsWith('/etc/'), `Must not return /etc paths, got: ${m.path}`);
+        }
+      } // else: no matches after filtering — also acceptable
+    });
+  });
+
+  await test('findFiles with extension only returns all matching-ext files', async () => {
+    await withPatchedExports('./tools/ps-runner', {
+      runPS: async () => ({ ok: true, stdout: fakePsJson, stderr: '' }),
+    }, async () => {
+      const r = await files.findFiles({ extension: 'pdf' });
+      assert.ok(r.ok);
+      for (const m of r.data.matches) {
+        assert.ok(m.name.toLowerCase().endsWith('.pdf'), `non-pdf in results: ${m.name}`);
+      }
+    });
+  });
+
+  await test('findFiles with zero matches returns helpful error with tokens + aliases', async () => {
+    await withPatchedExports('./tools/ps-runner', {
+      runPS: async () => ({ ok: true, stdout: JSON.stringify([]), stderr: '' }),
+    }, async () => {
+      const r = await files.findFiles({ query: 'cv', locationHint: 'desktop' });
+      assert.ok(!r.ok);
+      assert.ok(r.error.includes('Desktop') || r.error.includes('desktop'), `error mentions location: ${r.error}`);
+      assert.ok(r.error.includes('cv'), `error mentions query: ${r.error}`);
+      assert.ok(/resume|curriculum|vitae/i.test(r.error), `error mentions alias: ${r.error}`);
+    });
+  });
+
+  await test('findFiles honours locationHint=documents (single root)', async () => {
+    let scriptSeen = '';
+    await withPatchedExports('./tools/ps-runner', {
+      runPS: async (script) => { scriptSeen = script; return { ok: true, stdout: fakePsJson, stderr: '' }; },
+    }, async () => {
+      await files.findFiles({ query: 'resume', locationHint: 'documents' });
+      assert.ok(scriptSeen.includes('Documents'), 'PS script should target Documents');
+      assert.ok(!scriptSeen.includes('Desktop'), 'PS script should NOT target Desktop when hint=documents');
+    });
+  });
+}
+
 // ─── Run all suites ───────────────────────────────────────────────────────────
 
 (async () => {
   console.log('\n╔══════════════════════════════════════════════════════════════════════════╗');
-  console.log('║  Jarvis — Phase 1 + Phase 2 + Phase 3 M3.2 Tier A Tests                 ║');
+  console.log('║  Jarvis — Phase 1 + Phase 2 + Phase 3 M3.3 Tier A Tests                 ║');
   console.log('╚══════════════════════════════════════════════════════════════════════════╝');
 
   await runPathTests();
@@ -1721,6 +2156,7 @@ async function runM32SystemTests() {
   await runM24SynonymTests();
   await runM31BrowserSiteTests();
   await runM32SystemTests();
+  await runM33FileSearchTests();
 
   console.log('\n─────────────────────────────────────');
   console.log(`Results: ${passed} passed, ${failed} failed`);
@@ -1729,6 +2165,6 @@ async function runM32SystemTests() {
     console.error('\nSome tests failed.');
     process.exit(1);
   } else {
-    console.log('\nAll tests passed. Phase 3 M3.2 complete.');
+    console.log('\nAll tests passed. Phase 3 M3.3 complete.');
   }
 })();

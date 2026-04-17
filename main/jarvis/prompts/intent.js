@@ -14,6 +14,8 @@ const SUPPORTED_INTENTS = [
   'file.append',
   'file.list',
   'file.mkdir',
+  'file.find',
+  'file.open',
   'app.open',
   'app.close',
   'app.focus',
@@ -63,7 +65,10 @@ Do not return any text outside the JSON. Do not explain your reasoning.
     "combo": "<normalized shortcut combo, e.g. 'ctrl+c' or 'alt+left'>",
     "siteName": "<spoken site name, lowercased, e.g. 'gmail', 'youtube', 'github'>",
     "action": "<for system.volume: 'mute'|'unmute'|'up'|'down'|'set'; for system.brightness: 'up'|'down'>",
-    "level": "<for system.volume action='set': integer 0–100>"
+    "level": "<for system.volume action='set': integer 0–100>",
+    "query": "<for file.find: filename or keyword to search for>",
+    "extension": "<for file.find: optional extension filter, e.g. 'pdf'>",
+    "name": "<for file.open: spoken filename or document alias, e.g. 'notes.txt' or 'cv'>"
   },
   "raw": "<the original transcript verbatim>",
   "needsConfirm": <true if the action needs confirmation, otherwise false>,
@@ -78,6 +83,8 @@ Do not return any text outside the JSON. Do not explain your reasoning.
 - file.append      — append text to an existing file
 - file.list        — list contents of a directory
 - file.mkdir       — create a new directory/folder
+- file.find        — search for files by name, keyword, or extension (e.g. "find my CV", "locate notes.txt")
+- file.open        — open a file with the default OS application (e.g. "open resume.pdf", "open my CV")
 - app.open         — open/launch an application by name
 - app.close        — close/quit a named application gracefully
 - app.focus        — focus/bring to foreground a named application

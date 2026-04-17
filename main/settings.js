@@ -74,6 +74,10 @@ function getDefaults() {
     // 'long_only' — confirm only when text.length >= 80 (default)
     // 'never'     — never confirm (use with care)
     jarvisInputConfirmMode: 'long_only',
+    // Phase 3 — File search
+    jarvisFileSearchDepth: 3,         // Get-ChildItem -Depth value for file.find
+    // Phase 3 — Destructive operations
+    jarvisDestructiveConfirm: 'always', // 'always' | 'never' (never only applies to Jarvis workspace)
   };
 }
 
@@ -146,9 +150,26 @@ function isJarvisLlmFallbackEnabled() {
   return getSetting('jarvisLlmFallback', true) === true;
 }
 
+/** Get the file search recursion depth (1–10). */
+function getFileSearchDepth() {
+  const d = getSetting('jarvisFileSearchDepth', 3);
+  return Math.max(1, Math.min(10, Number(d) || 3));
+}
+
+/**
+ * Returns true if a confirmation is required before a destructive file op.
+ * Files outside the Jarvis workspace always require confirmation, even when
+ * jarvisDestructiveConfirm is set to 'never'.
+ */
+function isDestructiveConfirmRequired(locationHint) {
+  if (locationHint && locationHint !== 'jarvis') return true;
+  return getSetting('jarvisDestructiveConfirm', 'always') !== 'never';
+}
+
 module.exports = {
   loadSettings, saveSettings, getSetting,
   isFirstRun, getApiKey, getOpenAIKey, getModel, getElevenLabsKey,
   isAgentEnabled, getAgentBackend, getMistralKey,
   isJarvisEnabled, isJarvisLlmFallbackEnabled,
+  getFileSearchDepth, isDestructiveConfirmRequired,
 };

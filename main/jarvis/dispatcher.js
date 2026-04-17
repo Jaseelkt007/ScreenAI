@@ -65,6 +65,33 @@ async function dispatch(classifierResult) {
       return files.createDir({ name, locationHint: params.locationHint });
     }
 
+    case 'file.find': {
+      const query = params.query || params.extension;
+      if (!query) throw new DispatchError('No search query or extension provided for file search.');
+      return files.findFiles({
+        query:        params.query,
+        extension:    params.extension,
+        locationHint: params.locationHint,
+      });
+    }
+
+    case 'file.open': {
+      if (params.path) {
+        return files.openFile({ path: params.path });
+      }
+      if (params.name) {
+        const findResult = await files.findFiles({
+          query:        params.name,
+          locationHint: params.locationHint,
+        });
+        if (!findResult.ok || !findResult.data || findResult.data.matches.length === 0) {
+          return { ok: false, error: `Couldn't find a file named "${params.name}".`, action: '' };
+        }
+        return files.openFile({ path: findResult.data.matches[0].path });
+      }
+      throw new DispatchError('No filename or path provided for file open.');
+    }
+
     // ── System ops (PowerShell / rundll32) ───────────────────────────────────
 
     case 'system.volume': {

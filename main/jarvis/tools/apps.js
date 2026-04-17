@@ -137,6 +137,43 @@ const WHITELIST = [
     aliases: ['explorer', 'file explorer', 'files'],
     launch: () => trySpawn('explorer.exe', []),
   },
+  {
+    aliases: ['obs', 'obs studio'],
+    launch: () => tryKnownPath(
+      'C:/Program Files/obs-studio/bin/64bit/obs64.exe',
+      'obs64.exe'
+    ),
+  },
+  {
+    aliases: ['discord'],
+    launch: () => tryKnownPath(
+      `${process.env.LOCALAPPDATA}/Discord/Update.exe`,
+      'Discord.exe',
+      ['--processStart', 'Discord.exe']
+    ),
+  },
+  {
+    aliases: ['zoom'],
+    launch: () => tryUri('zoommtg:'),
+  },
+  {
+    aliases: ['telegram'],
+    launch: () => tryKnownPath(
+      `${process.env.APPDATA}/Telegram Desktop/Telegram.exe`,
+      'Telegram.exe'
+    ),
+  },
+  {
+    aliases: ['whatsapp'],
+    launch: () => tryUri('whatsapp:'),
+  },
+  {
+    aliases: ['notepad++', 'notepadplusplus'],
+    launch: () => tryKnownPath(
+      'C:/Program Files/Notepad++/notepad++.exe',
+      'notepad++.exe'
+    ),
+  },
 ];
 
 // Build lookup map at module load — O(1) lookups at runtime

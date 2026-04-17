@@ -80,6 +80,20 @@ async function verify(classifierResult, toolResult) {
       case 'file.mkdir':
         return verifyDirExists(data.path);
 
+      case 'file.find':
+        return {
+          verified: Array.isArray(data.matches) && data.matches.length > 0,
+          method:   'search_ok',
+          detail:   `${(data.matches || []).length} matches for "${data.query}"`,
+        };
+
+      case 'file.open':
+        return {
+          verified: toolResult.ok === true,
+          method:   'open_ok',
+          detail:   data.path ? `opened ${path.basename(data.path)}` : 'shell.openPath succeeded',
+        };
+
       case 'app.open':
         return {
           verified: toolResult.ok === true,
