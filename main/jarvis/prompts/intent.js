@@ -42,6 +42,8 @@ const SUPPORTED_INTENTS = [
   'system.brightness',
   'system.lock',
   'system.unsupported',
+  'system.select',
+  'system.cancel',
 ];
 
 const INTENT_SYSTEM_PROMPT = `
@@ -116,6 +118,8 @@ Do not return any text outside the JSON. Do not explain your reasoning.
 - system.brightness — increase or decrease display brightness
 - system.lock      — lock the Windows session / screen
 - system.unsupported — command is not supported or cannot be understood
+- system.select    — select a numbered option from a disambiguation list (e.g. "the first one", "two", "number 3") — params: { ordinal: <1-5> }
+- system.cancel    — cancel the current action or pending selection (e.g. "cancel", "never mind", "forget it")
 
 ## Rules
 

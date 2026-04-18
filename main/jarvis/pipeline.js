@@ -106,7 +106,16 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0) {
   }
 
   // ── 3. Confirmation gate ─────────────────────────────────────────────────────
-  if (classifierResult.needsConfirm) {
+  // For file ops that search by name (no resolved path yet), skip confirmation
+  // here — dispatch will either return ambiguous (disambiguation flow) or return
+  // _resolved with the concrete filename. Confirmation fires after resolution.
+  const FIND_FIRST_INTENTS = new Set(['file.delete', 'file.rename', 'file.move']);
+  const deferConfirm =
+    classifierResult.needsConfirm &&
+    FIND_FIRST_INTENTS.has(classifierResult.intent) &&
+    !classifierResult.params.path;
+
+  if (classifierResult.needsConfirm && !deferConfirm) {
     hudSend('jarvis:confirm', {
       message:     buildConfirmMessage(classifierResult),
       actionLabel: buildActionLabel(classifierResult),
@@ -145,8 +154,97 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0) {
   timings.dispatch = Date.now() - t2;
   logTiming('Dispatch', timings.dispatch);
 
+  // ── 4b. Disambiguation: file op found multiple candidates ─────────────────
+  if (!toolResult.ok && toolResult.ambiguous) {
+    const list = (toolResult.candidates || [])
+      .slice(0, 5)
+      .map((c, i) => `${i + 1}. ${c.name}`)
+      .join(' — ');
+    hudSend('jarvis:disambiguate', {
+      candidates: toolResult.candidates,
+      original:   transcript,
+      listText:   list,
+    });
+    await speakAndDone(hudSend, false, toolResult.action, toolResult.action, timings, t0, { disambiguating: true });
+    return;
+  }
+
   if (!toolResult.ok) {
     await speakAndDone(hudSend, false, toolResult.error, toolResult.error, timings, t0);
+    return;
+  }
+
+  // ── 4c. _resolved: re-dispatch with resolved target and confirmation gate ──
+  // Used by system.select (ordinal selection) and by file.delete/rename/move
+  // after they resolve a single match — confirmation fires with the real filename.
+  if (toolResult.ok && toolResult._resolved) {
+    const resolved = toolResult._resolved;
+
+    // Confirmation gate for the resolved intent
+    if (resolved.needsConfirm) {
+      hudSend('jarvis:confirm', {
+        message:     buildConfirmMessage(resolved),
+        actionLabel: buildActionLabel(resolved),
+      });
+      let confirmed = false;
+      try { confirmed = await waitForConfirm(); } catch { confirmed = false; }
+      if (!confirmed) {
+        hudSend('jarvis:done', { ok: false, display: 'Cancelled.' });
+        return;
+      }
+    }
+
+    // Re-dispatch the resolved intent
+    hudSend('jarvis:status', { phase: 'executing', intent: resolved.intent, transcript });
+    const t2b = Date.now();
+    let resolvedResult;
+    try {
+      resolvedResult = await dispatcherMod.dispatch(resolved);
+    } catch (err) {
+      await speakAndDone(hudSend, false, err.message, err.message, timings, t0);
+      return;
+    }
+    timings.dispatch += Date.now() - t2b;
+
+    if (!resolvedResult.ok) {
+      await speakAndDone(hudSend, false, resolvedResult.error, resolvedResult.error, timings, t0);
+      return;
+    }
+
+    // Verify the resolved intent
+    hudSend('jarvis:status', { phase: 'verifying', intent: resolved.intent, transcript });
+    const t3b = Date.now();
+    const resolvedVerify = await verifierMod.verify(resolved, resolvedResult);
+    timings.verify = Date.now() - t3b;
+    logTiming('Verify(resolved)', timings.verify);
+
+    const resolvedDisplay = buildDisplay(resolvedResult, resolvedVerify);
+    const resolvedSpoken  = buildSpoken(resolvedResult, resolvedVerify);
+
+    // TTS for the resolved operation
+    hudSend('jarvis:status', { phase: 'speaking', transcript });
+    const t4b = Date.now();
+    let audioBase64b = null;
+    let mimeTypeb    = null;
+    try {
+      const { synthesizeSpeech } = require('../tts');
+      const ttsResult = await synthesizeSpeech(resolvedSpoken);
+      audioBase64b = ttsResult.audioBuffer.toString('base64');
+      mimeTypeb    = ttsResult.mimeType;
+    } catch { /* non-fatal */ }
+    timings.tts   = Date.now() - t4b;
+    timings.total = Date.now() - t0;
+    logTiming('Total', timings.total);
+
+    hudSend('jarvis:done', {
+      ok: true,
+      display: resolvedDisplay,
+      audioBase64: audioBase64b,
+      mimeType: mimeTypeb,
+      verifiedBy: resolvedVerify.verified
+        ? `${resolvedVerify.method} (${resolvedVerify.detail || 'ok'})`
+        : null,
+    });
     return;
   }
 
@@ -390,7 +488,7 @@ function _injectChainContext(classified, chainContext) {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-async function speakAndDone(hudSend, ok, display, spokenText, timings, t0) {
+async function speakAndDone(hudSend, ok, display, spokenText, timings, t0, extraPayload = {}) {
   let audioBase64 = null;
   let mimeType    = null;
 
@@ -406,7 +504,7 @@ async function speakAndDone(hudSend, ok, display, spokenText, timings, t0) {
   timings.total = Date.now() - t0;
   logTiming('Total', timings.total);
 
-  hudSend('jarvis:done', { ok, display, audioBase64, mimeType });
+  hudSend('jarvis:done', { ok, display, audioBase64, mimeType, ...extraPayload });
 }
 
 function buildDisplay(toolResult, verifierResult) {

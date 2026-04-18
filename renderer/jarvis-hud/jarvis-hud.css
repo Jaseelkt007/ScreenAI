@@ -27,7 +27,8 @@
 
 html, body {
   width:  360px;
-  height: 120px;
+  min-height: 80px;
+  max-height: 300px;
   overflow: hidden;
   background: transparent;
   -webkit-app-region: drag;
@@ -274,6 +275,40 @@ body {
   overflow:      hidden;
   text-overflow: ellipsis;
   white-space:   nowrap;
+}
+
+/* ── Disambiguation bar (M4.1) ───────────────────────────────────────────── */
+
+#disambiguate-bar {
+  -webkit-app-region: no-drag;
+  background:  rgba(124, 108, 248, 0.10);
+  border:      1px solid rgba(124, 108, 248, 0.28);
+  border-radius: 6px;
+  padding:     5px 8px 4px;
+  display:     flex;
+  flex-direction: column;
+  gap:         3px;
+}
+
+#disambiguate-prompt {
+  font-size:   11px;
+  color:       var(--accent);
+  font-weight: 600;
+}
+
+#disambiguate-list {
+  margin:      0;
+  padding:     0 0 0 14px;
+  list-style:  decimal;
+}
+
+#disambiguate-list li {
+  font-size:   11px;
+  color:       var(--text-dim);
+  overflow:    hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding:     1px 0;
 }
 
 /* ── Utility ─────────────────────────────────────────────────────────────── */

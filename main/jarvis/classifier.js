@@ -30,6 +30,25 @@ const APP_NAMES_ALTS = Object.keys(APP_NAMES)
 // Each entry: { intent, pattern: RegExp, extract: (match, transcript) => params }
 
 const PATTERN_TABLE = [
+  // ── system.cancel — must be first: anchored, whole-transcript match ──
+  // Placed before everything so "cancel" / "never mind" can't accidentally match
+  // another rule when the user is cancelling an active disambiguation flow.
+  {
+    intent:  'system.cancel',
+    pattern: /^\s*(cancel|never\s+mind|nevermind|forget\s+it|abort|stop|no|nope)\s*$/i,
+    extract: () => ({}),
+  },
+
+  // ── system.select — ordinal selection during active disambiguation ──
+  // Placed second (before all file/app rules) so bare ordinals fire fast.
+  // Anchored: only fires when the entire transcript is an ordinal reference.
+  // Includes both cardinal ("one", "two") and ordinal ("first", "second") forms.
+  {
+    intent:  'system.select',
+    pattern: /^\s*(?:the\s+|number\s+|option\s+)?(first|second|third|fourth|fifth|one|two|three|four|five|1|2|3|4|5)\s*(?:one|option|file|match)?\s*$/i,
+    extract: (m, t) => ({ ordinal: extractOrdinal(t) }),
+  },
+
   // ── file.mkdir — check before file.create to avoid "folder" matching "file" rules ──
   {
     intent:  'file.mkdir',
@@ -990,6 +1009,30 @@ function extractTypedText(t) {
   return m ? m[1].trim() : '';
 }
 
+// ─── M4.1 — Ordinal extraction ───────────────────────────────────────────────
+
+/**
+ * Convert a spoken or numeric ordinal into a 1-based integer.
+ * Returns null when no known ordinal is found.
+ */
+function extractOrdinal(t) {
+  const lower = t.toLowerCase().trim();
+  const MAP = {
+    'first': 1,  'one': 1,  '1': 1,
+    'second': 2, 'two': 2,  '2': 2,
+    'third': 3,  'three': 3,'3': 3,
+    'fourth': 4, 'four': 4, '4': 4,
+    'fifth': 5,  'five': 5, '5': 5,
+  };
+  // Check longer words first to avoid "one" matching inside "fourth"
+  const keys = Object.keys(MAP).sort((a, b) => b.length - a.length);
+  for (const word of keys) {
+    const re = new RegExp(`\\b${word}\\b`);
+    if (re.test(lower)) return MAP[word];
+  }
+  return null;
+}
+
 // ─── M3.5 — Sequential command chaining ──────────────────────────────────────
 
 /**
@@ -1014,4 +1057,4 @@ function splitChain(transcript) {
 
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
-module.exports = { classify, splitChain };
+module.exports = { classify, splitChain, extractOrdinal };

@@ -206,6 +206,13 @@ contextBridge.exposeInMainWorld('jarvis', {
     return () => ipcRenderer.removeListener('jarvis:done', h);
   },
 
+  /** main → renderer: disambiguation list (M4.1). Returns unsubscribe fn. */
+  onDisambiguate: (fn) => {
+    const h = (_, p) => fn(p);
+    ipcRenderer.on('jarvis:disambiguate', h);
+    return () => ipcRenderer.removeListener('jarvis:disambiguate', h);
+  },
+
   /** Send confirm (true) or cancel (false) reply to main. */
   replyConfirm: (ok) =>
     ipcRenderer.send('jarvis:confirm-reply', ok),

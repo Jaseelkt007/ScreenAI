@@ -39,6 +39,9 @@ const confirmBar   = document.getElementById('confirm-bar');
 const confirmMsg   = document.getElementById('confirm-msg');
 const confirmOkBtn = document.getElementById('confirm-ok-btn');
 const confirmCancelBtn = document.getElementById('confirm-cancel-btn');
+const disambiguateBar    = document.getElementById('disambiguate-bar');
+const disambiguatePrompt = document.getElementById('disambiguate-prompt');
+const disambiguateList   = document.getElementById('disambiguate-list');
 const resultBar    = document.getElementById('result-bar');
 const resultText   = document.getElementById('result-text');
 const closeBtn     = document.getElementById('close-btn');
@@ -56,13 +59,14 @@ let isCancelled    = false;
 
 // ── Pipeline IPC state ────────────────────────────────────────────────────────
 
-let _unsubStartRec = null;
-let _unsubStopRec  = null;
-let _unsubStatus   = null;
-let _unsubConfirm  = null;
-let _unsubDone     = null;
-let _dismissTimer  = null;
-let _currentAudio  = null;
+let _unsubStartRec    = null;
+let _unsubStopRec     = null;
+let _unsubStatus      = null;
+let _unsubConfirm     = null;
+let _unsubDone        = null;
+let _unsubDisambig    = null;
+let _dismissTimer     = null;
+let _currentAudio     = null;
 
 // ── State machine ─────────────────────────────────────────────────────────────
 
@@ -100,6 +104,8 @@ function setState(state, labelOverride) {
     transcript.classList.add('hidden');
     transcript.textContent = '';
     cancelDismissTimer();
+    // Keep the disambiguation list visible during idle — user needs to see
+    // the choices. It will be cleared on the next successful command or close.
   }
 }
 
@@ -255,12 +261,17 @@ function subscribePipeline() {
   _unsubDone = window.jarvis.onDone((payload) => {
     handleDone(payload);
   });
+
+  _unsubDisambig = window.jarvis.onDisambiguate((payload) => {
+    showDisambiguationList(payload.candidates, payload.listText);
+  });
 }
 
 function unsubscribePipeline() {
   if (_unsubStatus)  { _unsubStatus();  _unsubStatus  = null; }
   if (_unsubConfirm) { _unsubConfirm(); _unsubConfirm = null; }
   if (_unsubDone)    { _unsubDone();    _unsubDone    = null; }
+  if (_unsubDisambig){ _unsubDisambig();_unsubDisambig= null; }
 }
 
 function buildPhaseLabel(phase, intent, step) {
@@ -296,11 +307,22 @@ function sendConfirm(ok) {
 // ── Done handling ─────────────────────────────────────────────────────────────
 
 function handleDone(payload) {
-  const { ok, display, audioBase64, mimeType, error } = payload;
+  const { ok, display, audioBase64, mimeType, error, disambiguating } = payload;
 
   hideConfirm();
   unsubscribePipeline();
   releaseMic();
+
+  // Disambiguation state: show list and wait for next command; do not auto-dismiss.
+  if (disambiguating) {
+    transcript.classList.add('hidden');
+    setState('idle');
+    if (audioBase64 && mimeType) playAudio(audioBase64, mimeType);
+    return;
+  }
+
+  // On a successful result, clear any lingering disambiguation list.
+  if (ok) hideDisambiguationList();
 
   const displayText = display || (ok ? 'Done.' : error || 'Error.');
   resultText.textContent = displayText;
@@ -314,6 +336,24 @@ function handleDone(payload) {
   const delay = ok ? 3000 : 5000;
   cancelDismissTimer();
   _dismissTimer = setTimeout(() => resetToIdle(), delay);
+}
+
+// ── Disambiguation list (M4.1) ────────────────────────────────────────────────
+
+function showDisambiguationList(candidates, listText) {
+  disambiguateList.innerHTML = '';
+  (candidates || []).slice(0, 5).forEach((c) => {
+    const li = document.createElement('li');
+    li.textContent = c.name;
+    disambiguateList.appendChild(li);
+  });
+  disambiguatePrompt.textContent = 'Which one? Say one, two, or three.';
+  disambiguateBar.classList.remove('hidden');
+}
+
+function hideDisambiguationList() {
+  disambiguateBar.classList.add('hidden');
+  disambiguateList.innerHTML = '';
 }
 
 // ── Audio playback ────────────────────────────────────────────────────────────
@@ -342,6 +382,7 @@ function resetToIdle() {
   unsubscribePipeline();
   if (isRecording) cancelRecording();
   else releaseMic();
+  hideDisambiguationList();
   setState('idle');
   if (_textInputVisible) cmdInput.focus();
 }

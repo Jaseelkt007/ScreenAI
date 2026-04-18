@@ -1,7 +1,7 @@
 {
   "name": "screenai",
   "productName": "ScreenAI",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "description": "ScreenAI — AI-powered screen analysis desktop assistant using Electron and Google Gemini Vision",
   "main": "main/main.js",
   "scripts": {

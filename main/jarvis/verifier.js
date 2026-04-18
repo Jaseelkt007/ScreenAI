@@ -192,6 +192,16 @@ async function verify(classifierResult, toolResult) {
       case 'clipboard.write':
         return verifyClipboard(data.written);
 
+      // system.select and system.cancel are verified by their ok flag.
+      // system.select's actual operation is re-dispatched and verified separately.
+      case 'system.select':
+      case 'system.cancel':
+        return {
+          verified: toolResult.ok === true,
+          method:   'spawn_ok',
+          detail:   intent === 'system.cancel' ? 'cancel handled' : 'selection handled',
+        };
+
       default:
         return { verified: false, method: 'unknown_intent', detail: `No verifier for "${intent}"` };
     }

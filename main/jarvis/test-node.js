@@ -23,7 +23,7 @@ const assert   = require('assert').strict;
 // Modules under test (pure Node — no Electron dependency)
 const files = require('./tools/files');
 const { resolveJarvisPath, createFile, readFile, writeFile, appendFile, listDir, createDir, LOCATION_MAP } = files;
-const { classify, splitChain }  = require('./classifier');
+const { classify, splitChain, extractOrdinal } = require('./classifier');
 const { dispatch }               = require('./dispatcher');
 const { verify }                 = require('./verifier');
 const { runPipelineFromText }    = require('./pipeline');
@@ -2234,33 +2234,22 @@ async function runM34DestructiveFileTests() {
     }
   });
 
-  await test('file.delete: dispatcher calls findFiles first, passes resolved path to deleteFile', async () => {
-    const fakePath = path.join(LOCATION_MAP.jarvis, `dispatch-delete-${Date.now()}.txt`);
-    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
-    await fs.promises.writeFile(fakePath, 'dispatch delete test', 'utf8');
-    let pathPassedToDelete = null;
-    const origDelete = files.deleteFile;
-    files.deleteFile = async ({ path: p }) => {
-      pathPassedToDelete = p;
-      return origDelete({ path: p });
-    };
-    try {
-      await withPatchedExports('./tools/files', {
-        findFiles: async () => ({
-          ok:     true,
-          data:   { matches: [{ name: path.basename(fakePath), path: fakePath, sizeBytes: 100, modifiedAt: '', score: 15 }], searchedIn: 'Jarvis', query: 'test' },
-          action: `Found ${path.basename(fakePath)}.`,
-        }),
-      }, async () => {
-        const r = await dispatch({ intent: 'file.delete', params: { name: 'test' }, needsConfirm: true });
-        assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
-        assert.equal(r.data.deleted, true);
-        assert.ok(!fs.existsSync(fakePath), 'File should be gone after dispatch delete');
-      });
-    } finally {
-      files.deleteFile = origDelete;
-      if (fs.existsSync(fakePath)) fs.unlinkSync(fakePath);
-    }
+  await test('file.delete: dispatcher calls findFiles first, returns _resolved with concrete path', async () => {
+    const fakeName = `dispatch-delete-${Date.now()}.txt`;
+    const fakePath = path.join(LOCATION_MAP.jarvis, fakeName);
+    await withPatchedExports('./tools/files', {
+      findFiles: async () => ({
+        ok:     true,
+        data:   { matches: [{ name: fakeName, path: fakePath, sizeBytes: 100, modifiedAt: '', score: 15 }], searchedIn: 'Jarvis', query: 'test' },
+        action: `Found ${fakeName}.`,
+      }),
+    }, async () => {
+      const cr = { intent: 'file.delete', params: { name: 'test' }, needsConfirm: true };
+      const r  = await dispatch(cr);
+      assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
+      assert.ok(r._resolved, 'Should return _resolved for pipeline confirm gate');
+      assert.equal(r._resolved.params.path, fakePath, '_resolved.params.path should be the located path');
+    });
   });
 
   await test('file.delete: findFiles returns no matches → ok:false helpful error', async () => {
@@ -2283,31 +2272,23 @@ async function runM34DestructiveFileTests() {
     }
   });
 
-  await test('file.rename: dispatcher calls findFiles, passes resolved path to renameFile', async () => {
+  await test('file.rename: dispatcher calls findFiles, returns _resolved with concrete path', async () => {
     const srcName = `dispatch-rename-src-${Date.now()}.txt`;
     const dstName = `dispatch-rename-dst-${Date.now()}.txt`;
     const srcPath = path.join(LOCATION_MAP.jarvis, srcName);
-    const dstPath = path.join(LOCATION_MAP.jarvis, dstName);
-    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
-    await fs.promises.writeFile(srcPath, 'rename dispatch test', 'utf8');
-    try {
-      await withPatchedExports('./tools/files', {
-        findFiles: async () => ({
-          ok:   true,
-          data: { matches: [{ name: srcName, path: srcPath, sizeBytes: 100, modifiedAt: '', score: 15 }], searchedIn: 'Jarvis', query: srcName },
-          action: `Found ${srcName}.`,
-        }),
-      }, async () => {
-        const r = await dispatch({ intent: 'file.rename', params: { name: srcName, newName: dstName }, needsConfirm: true });
-        assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
-        assert.equal(r.data.renamed, true);
-        assert.ok(!fs.existsSync(srcPath), 'Old path should be gone');
-        assert.ok(fs.existsSync(dstPath), 'New path should exist');
-      });
-    } finally {
-      if (fs.existsSync(srcPath)) fs.unlinkSync(srcPath);
-      if (fs.existsSync(dstPath)) fs.unlinkSync(dstPath);
-    }
+    await withPatchedExports('./tools/files', {
+      findFiles: async () => ({
+        ok:   true,
+        data: { matches: [{ name: srcName, path: srcPath, sizeBytes: 100, modifiedAt: '', score: 15 }], searchedIn: 'Jarvis', query: srcName },
+        action: `Found ${srcName}.`,
+      }),
+    }, async () => {
+      const cr = { intent: 'file.rename', params: { name: srcName, newName: dstName }, needsConfirm: true };
+      const r  = await dispatch(cr);
+      assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
+      assert.ok(r._resolved, 'Should return _resolved for pipeline confirm gate');
+      assert.equal(r._resolved.params.path, srcPath, '_resolved.params.path should be the located path');
+    });
   });
 
   await test('file.move missing targetLocationHint → DispatchError', async () => {
@@ -2320,31 +2301,22 @@ async function runM34DestructiveFileTests() {
     }
   });
 
-  await test('file.move: dispatcher calls findFiles, passes resolved path + targetLocationHint to moveFile', async () => {
+  await test('file.move: dispatcher calls findFiles, returns _resolved with concrete path', async () => {
     const fname   = `dispatch-move-${Date.now()}.txt`;
     const srcPath = path.join(LOCATION_MAP.jarvis, fname);
-    const dstPath = path.join(LOCATION_MAP.desktop, fname);
-    await fs.promises.mkdir(LOCATION_MAP.jarvis, { recursive: true });
-    await fs.promises.writeFile(srcPath, 'move dispatch test', 'utf8');
-    try {
-      await withPatchedExports('./tools/files', {
-        findFiles: async () => ({
-          ok:   true,
-          data: { matches: [{ name: fname, path: srcPath, sizeBytes: 100, modifiedAt: '', score: 15 }], searchedIn: 'Jarvis', query: fname },
-          action: `Found ${fname}.`,
-        }),
-      }, async () => {
-        const r = await dispatch({ intent: 'file.move', params: { name: fname, targetLocationHint: 'desktop' }, needsConfirm: true });
-        assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
-        assert.equal(r.data.moved, true);
-        assert.ok(!fs.existsSync(srcPath), 'Source should be gone');
-        // Destination may land at LOCATION_MAP.desktop or the PS-resolved Desktop path;
-        // either way the move should succeed and source be absent.
-      });
-    } finally {
-      try { if (fs.existsSync(srcPath)) fs.unlinkSync(srcPath); } catch {}
-      try { if (fs.existsSync(dstPath)) fs.unlinkSync(dstPath); } catch {}
-    }
+    await withPatchedExports('./tools/files', {
+      findFiles: async () => ({
+        ok:   true,
+        data: { matches: [{ name: fname, path: srcPath, sizeBytes: 100, modifiedAt: '', score: 15 }], searchedIn: 'Jarvis', query: fname },
+        action: `Found ${fname}.`,
+      }),
+    }, async () => {
+      const cr = { intent: 'file.move', params: { name: fname, targetLocationHint: 'desktop' }, needsConfirm: true };
+      const r  = await dispatch(cr);
+      assert.ok(r.ok, `Expected ok:true, got: ${r.error}`);
+      assert.ok(r._resolved, 'Should return _resolved for pipeline confirm gate');
+      assert.equal(r._resolved.params.path, srcPath, '_resolved.params.path should be the located path');
+    });
   });
 
   // ── M3.4 hardening: strict match gate ──
@@ -2367,7 +2339,9 @@ async function runM34DestructiveFileTests() {
     });
   });
 
-  await test('file.delete: ambiguous matches (2 candidates ≥ 10) → rejected', async () => {
+  await test('file.delete: ambiguous matches (2 candidates ≥ 10) → returns ambiguous:true (M4.1)', async () => {
+    const ctx = require('./context');
+    ctx.clear();
     await withPatchedExports('./tools/files', {
       findFiles: async () => ({
         ok:   true,
@@ -2379,12 +2353,11 @@ async function runM34DestructiveFileTests() {
       }),
     }, async () => {
       const r = await dispatch({ intent: 'file.delete', params: { name: 'notes' }, needsConfirm: true });
-      assert.ok(!r.ok, 'Should reject ambiguous matches');
-      assert.ok(
-        r.error.toLowerCase().includes('multiple') || r.error.toLowerCase().includes('specific'),
-        `error should mention multiple/specific: ${r.error}`
-      );
+      assert.ok(!r.ok, 'Should not be ok when ambiguous');
+      assert.ok(r.ambiguous, 'Should return ambiguous:true for multiple matches (M4.1 disambiguation)');
+      assert.ok(Array.isArray(r.candidates) && r.candidates.length >= 2, 'Should include candidates');
     });
+    ctx.clear();
   });
 
   await test('file.rename: low-confidence match → rejected', async () => {
@@ -3164,6 +3137,353 @@ async function runM40ContextTests() {
   });
 }
 
+// ─── 18. Phase 4 M4.1 — Suite 15: Ambiguity Resolution ──────────────────────
+
+async function runM41DisambiguationTests() {
+
+  // ── system.cancel patterns ──
+  section('18. M4.1 — Suite 15: system.cancel patterns');
+
+  await test('system.cancel: "cancel" → system.cancel', async () => {
+    const r = await classify('cancel', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.cancel');
+    assert.equal(r.confidence, 'pattern');
+  });
+
+  await test('system.cancel: "never mind" → system.cancel', async () => {
+    const r = await classify('never mind', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.cancel');
+  });
+
+  await test('system.cancel: "nevermind" → system.cancel', async () => {
+    const r = await classify('nevermind', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.cancel');
+  });
+
+  await test('system.cancel: "forget it" → system.cancel', async () => {
+    const r = await classify('forget it', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.cancel');
+  });
+
+  await test('system.cancel: "no" → system.cancel', async () => {
+    const r = await classify('no', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.cancel');
+  });
+
+  await test('system.cancel: "abort" → system.cancel', async () => {
+    const r = await classify('abort', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.cancel');
+  });
+
+  // Collision: "cancel" inside longer phrase should NOT fire system.cancel (anchored)
+  await test('system.cancel collision: "cancel my booking" → NOT system.cancel (anchored)', async () => {
+    const r = await classify('cancel my booking', LLM_NEVER_CALLED);
+    assert.notEqual(r.intent, 'system.cancel', 'multi-word phrase must not match anchored pattern');
+  });
+
+  // ── system.select patterns ──
+  section('18b. M4.1 — Suite 15: system.select patterns');
+
+  await test('system.select: "one" → { ordinal: 1 }', async () => {
+    const r = await classify('one', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.select');
+    assert.equal(r.params.ordinal, 1);
+  });
+
+  await test('system.select: "two" → { ordinal: 2 }', async () => {
+    const r = await classify('two', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.select');
+    assert.equal(r.params.ordinal, 2);
+  });
+
+  await test('system.select: "the second one" → { ordinal: 2 }', async () => {
+    const r = await classify('the second one', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.select');
+    assert.equal(r.params.ordinal, 2);
+  });
+
+  await test('system.select: "number 3" → { ordinal: 3 }', async () => {
+    const r = await classify('number 3', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.select');
+    assert.equal(r.params.ordinal, 3);
+  });
+
+  await test('system.select: "4" → { ordinal: 4 }', async () => {
+    const r = await classify('4', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.select');
+    assert.equal(r.params.ordinal, 4);
+  });
+
+  await test('system.select: "option 2" → { ordinal: 2 }', async () => {
+    const r = await classify('option 2', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.select');
+    assert.equal(r.params.ordinal, 2);
+  });
+
+  await test('system.select: "first" → { ordinal: 1 }', async () => {
+    const r = await classify('first', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.select');
+    assert.equal(r.params.ordinal, 1);
+  });
+
+  // Collision: "open one drive" should NOT match system.select (anchored)
+  await test('system.select collision: "open one drive" → NOT system.select', async () => {
+    const r = await classify('open one drive', LLM_NEVER_CALLED);
+    assert.notEqual(r.intent, 'system.select', '"open one drive" must not fire system.select');
+  });
+
+  // ── extractOrdinal ──
+  section('18c. M4.1 — Suite 15: extractOrdinal helper');
+
+  await test('extractOrdinal("first") → 1', () => {
+    assert.equal(extractOrdinal('first'), 1);
+  });
+
+  await test('extractOrdinal("second one") → 2', () => {
+    assert.equal(extractOrdinal('the second one'), 2);
+  });
+
+  await test('extractOrdinal("5") → 5', () => {
+    assert.equal(extractOrdinal('5'), 5);
+  });
+
+  await test('extractOrdinal("tenth") → null', () => {
+    assert.equal(extractOrdinal('tenth'), null);
+  });
+
+  // ── Dispatcher: system.cancel and system.select ──
+  section('18d. M4.1 — Suite 15: dispatcher system.cancel and system.select');
+
+  await test('dispatcher: system.cancel with no candidates → ok:true, clean message', async () => {
+    const ctx = require('./context');
+    ctx.clear();
+    const r = await dispatch({ intent: 'system.cancel', params: {} });
+    assert.ok(r.ok, 'should succeed');
+    assert.ok(r.action.includes('cancel') || r.action.includes('Cancel'), 'should mention cancel');
+  });
+
+  await test('dispatcher: system.cancel with candidates → clears candidates, ok:true', async () => {
+    const ctx = require('./context');
+    ctx.clear();
+    ctx.setCandidates([{ name: 'a.pdf', path: '/a.pdf' }], { intent: 'file.delete', params: {} });
+    assert.ok(ctx.getCandidates(), 'candidates should be set');
+    const r = await dispatch({ intent: 'system.cancel', params: {} });
+    assert.ok(r.ok);
+    assert.equal(ctx.getCandidates(), null, 'candidates should be cleared');
+    ctx.clear();
+  });
+
+  await test('dispatcher: system.select with no candidates → ok:false, clean error', async () => {
+    const ctx = require('./context');
+    ctx.clear();
+    const r = await dispatch({ intent: 'system.select', params: { ordinal: 1 } });
+    assert.ok(!r.ok, 'should fail');
+    assert.ok(r.error, 'should have error message');
+  });
+
+  await test('dispatcher: system.select with ordinal out of range → ok:false, error', async () => {
+    const ctx = require('./context');
+    ctx.clear();
+    ctx.setCandidates([
+      { name: 'a.pdf', path: '/a.pdf' },
+      { name: 'b.pdf', path: '/b.pdf' },
+    ], { intent: 'file.delete', params: { name: 'report' }, needsConfirm: true });
+    const r = await dispatch({ intent: 'system.select', params: { ordinal: 5 } });
+    assert.ok(!r.ok);
+    assert.ok(r.error.includes('2') || r.error.includes('option'), 'error should mention valid range');
+    ctx.clear();
+  });
+
+  await test('dispatcher: system.select valid → ok:true, _resolved set, context cleared', async () => {
+    const ctx = require('./context');
+    ctx.clear();
+    const candidates = [
+      { name: 'report-final.pdf', path: '/home/user/Documents/report-final.pdf', sizeBytes: 1024 },
+      { name: 'report-draft.pdf', path: '/home/user/Documents/report-draft.pdf', sizeBytes: 512 },
+    ];
+    const origClassified = { intent: 'file.delete', params: { name: 'report' }, needsConfirm: true };
+    ctx.setCandidates(candidates, origClassified);
+    const r = await dispatch({ intent: 'system.select', params: { ordinal: 2 } });
+    assert.ok(r.ok, 'should succeed');
+    assert.ok(r._resolved, '_resolved should be set');
+    assert.equal(r._resolved.intent, 'file.delete');
+    assert.equal(r._resolved.params.path, '/home/user/Documents/report-draft.pdf');
+    assert.equal(ctx.getCandidates(), null, 'candidates should be cleared after select');
+    ctx.clear();
+  });
+
+  // ── Dispatcher: file.delete ambiguity ──
+  section('18e. M4.1 — Suite 15: file.delete disambiguation flow');
+
+  await test('dispatcher: file.delete with 3 score-qualifying matches → ambiguous:true', async () => {
+    const ctx = require('./context');
+    ctx.clear();
+
+    const filesModule = require('./tools/files');
+    const origFind = filesModule.findFiles;
+    filesModule.findFiles = async () => ({
+      ok: true,
+      data: {
+        matches: [
+          { name: 'report-final.pdf', path: '/docs/report-final.pdf', score: 15 },
+          { name: 'report-draft.pdf', path: '/docs/report-draft.pdf', score: 12 },
+          { name: 'old-report.txt',   path: '/docs/old-report.txt',   score: 11 },
+        ],
+        query: 'report',
+        searchedIn: 'Documents',
+      },
+    });
+
+    try {
+      const r = await dispatch({ intent: 'file.delete', params: { name: 'report' }, needsConfirm: true });
+      assert.ok(!r.ok, 'should not be ok (ambiguous)');
+      assert.ok(r.ambiguous, 'should have ambiguous:true');
+      assert.ok(Array.isArray(r.candidates), 'should have candidates array');
+      assert.equal(r.candidates.length, 3);
+      assert.ok(r.action.includes('3') || r.action.includes('report'), 'action should mention count or name');
+      // context should have candidates set
+      const cands = ctx.getCandidates();
+      assert.ok(cands, 'context should have candidates set');
+      assert.equal(cands.candidates.length, 3);
+    } finally {
+      filesModule.findFiles = origFind;
+      ctx.clear();
+    }
+  });
+
+  await test('dispatcher: file.delete with single match → NOT ambiguous, proceeds normally', async () => {
+    const filesModule = require('./tools/files');
+    const origFind    = filesModule.findFiles;
+    const origDelete  = filesModule.deleteFile;
+
+    filesModule.findFiles = async () => ({
+      ok: true,
+      data: { matches: [{ name: 'report.pdf', path: '/docs/report.pdf', score: 18 }], query: 'report' },
+    });
+    filesModule.deleteFile = async ({ path: p }) => ({ ok: true, data: { path: p }, action: `Deleted ${p}.` });
+
+    try {
+      const r = await dispatch({ intent: 'file.delete', params: { name: 'report' }, needsConfirm: true });
+      assert.ok(!r.ambiguous, 'single match should not be ambiguous');
+    } finally {
+      filesModule.findFiles  = origFind;
+      filesModule.deleteFile = origDelete;
+    }
+  });
+
+  await test('file.find with multiple matches does NOT trigger disambiguation', async () => {
+    const filesModule = require('./tools/files');
+    const origFind = filesModule.findFiles;
+    filesModule.findFiles = async () => ({
+      ok: true,
+      data: {
+        matches: [
+          { name: 'report-final.pdf', path: '/docs/report-final.pdf', score: 15 },
+          { name: 'report-draft.pdf', path: '/docs/report-draft.pdf', score: 12 },
+        ],
+        query: 'report',
+      },
+    });
+    try {
+      const r = await dispatch({ intent: 'file.find', params: { query: 'report' } });
+      assert.ok(!r.ambiguous, 'file.find should never return ambiguous:true');
+    } finally {
+      filesModule.findFiles = origFind;
+    }
+  });
+
+  // ── Pipeline: disambiguate event emission ──
+  section('18f. M4.1 — Suite 15: pipeline disambiguation event emission');
+
+  await test('pipeline: ambiguous dispatch result → emits jarvis:disambiguate event', async () => {
+    const ctx = require('./context');
+    ctx.clear();
+
+    const dispatcherModule = require('./dispatcher');
+    const origDispatch = dispatcherModule.dispatch;
+
+    const candidates = [
+      { name: 'report-final.pdf', path: '/docs/report-final.pdf' },
+      { name: 'report-draft.pdf', path: '/docs/report-draft.pdf' },
+    ];
+
+    dispatcherModule.dispatch = async () => ({
+      ok:         false,
+      ambiguous:  true,
+      candidates,
+      action:     "I found 2 files matching \"report\". Say one or two.",
+    });
+
+    const events = [];
+    const hudSend = (ch, p) => events.push({ ch, payload: p });
+
+    try {
+      // Use transcript that classifies to file.delete (has extension so pattern matches)
+      await runPipelineFromText('delete report.pdf', hudSend, () => Promise.resolve(true));
+      const disambigEvent = events.find((e) => e.ch === 'jarvis:disambiguate');
+      assert.ok(disambigEvent, 'jarvis:disambiguate event should be emitted');
+      assert.ok(Array.isArray(disambigEvent.payload.candidates));
+      assert.equal(disambigEvent.payload.candidates.length, 2);
+
+      const doneEvent = events.find((e) => e.ch === 'jarvis:done');
+      assert.ok(doneEvent, 'jarvis:done should fire after disambiguation');
+      assert.ok(doneEvent.payload.disambiguating, 'done payload should have disambiguating:true');
+      assert.ok(!doneEvent.payload.ok, 'done should have ok:false');
+    } finally {
+      dispatcherModule.dispatch = origDispatch;
+      ctx.clear();
+    }
+  });
+
+  await test('pipeline: system.select _resolved → fires confirm gate then re-dispatches', async () => {
+    const ctx = require('./context');
+    ctx.clear();
+
+    const dispatcherModule = require('./dispatcher');
+    const origDispatch = dispatcherModule.dispatch;
+
+    let dispatchCallCount = 0;
+    let lastDispatchedIntent = null;
+
+    dispatcherModule.dispatch = async (cr) => {
+      dispatchCallCount++;
+      lastDispatchedIntent = cr.intent;
+
+      if (cr.intent === 'system.select') {
+        const resolved = {
+          intent: 'file.delete',
+          params: { name: 'report-final.pdf', path: '/docs/report-final.pdf' },
+          needsConfirm: true,
+        };
+        return { ok: true, _resolved: resolved, data: { selectedCandidate: resolved.params }, action: 'Selected "report-final.pdf".' };
+      }
+      if (cr.intent === 'file.delete') {
+        return { ok: true, data: { path: '/docs/report-final.pdf' }, action: 'Deleted report-final.pdf.' };
+      }
+      return origDispatch(cr);
+    };
+
+    const confirmLog = [];
+    const events = [];
+    const hudSend = (ch, p) => events.push({ ch, payload: p });
+    const waitForConfirm = () => {
+      confirmLog.push('confirm_asked');
+      return Promise.resolve(true);
+    };
+
+    try {
+      await runPipelineFromText('the second one', hudSend, waitForConfirm);
+      assert.ok(confirmLog.length >= 1, 'confirmation gate should have fired for the resolved file.delete');
+      assert.equal(dispatchCallCount, 2, 'should dispatch twice: system.select then file.delete');
+      const doneEvent = events.find((e) => e.ch === 'jarvis:done');
+      assert.ok(doneEvent && doneEvent.payload.ok, 'pipeline should end with ok:true');
+    } finally {
+      dispatcherModule.dispatch = origDispatch;
+      ctx.clear();
+    }
+  });
+}
+
 // ─── Run all suites ───────────────────────────────────────────────────────────
 
 (async () => {
@@ -3188,6 +3508,7 @@ async function runM40ContextTests() {
   await runM34DestructiveFileTests();
   await runM35ChainTests();
   await runM40ContextTests();
+  await runM41DisambiguationTests();
 
   console.log('\n─────────────────────────────────────');
   console.log(`Results: ${passed} passed, ${failed} failed`);
@@ -3196,6 +3517,6 @@ async function runM40ContextTests() {
     console.error('\nSome tests failed.');
     process.exit(1);
   } else {
-    console.log('\nAll tests passed. Phase 4 M4.0 complete.');
+    console.log('\nAll tests passed. Phase 4 M4.1 complete.');
   }
 })();

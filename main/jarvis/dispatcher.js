@@ -104,9 +104,14 @@ async function dispatch(classifierResult) {
         if (!findResult.ok || !findResult.data || findResult.data.matches.length === 0) {
           return { ok: false, error: `Couldn't find a file named "${params.name}".`, action: '' };
         }
-        const topMatch   = findResult.data.matches[0];
-        const openResult = await files.openFile({ path: topMatch.path });
-        if (openResult.ok) context.setFileTarget(topMatch.name, topMatch.path);
+        const matches = findResult.data.matches;
+        // Disambiguate when multiple candidates found (file.open is non-destructive
+        // but opening the wrong file is still undesirable).
+        if (matches.length > 1) {
+          return buildAmbiguousResult(matches, params.name, classifierResult);
+        }
+        const openResult = await files.openFile({ path: matches[0].path });
+        if (openResult.ok) context.setFileTarget(matches[0].name, matches[0].path);
         return openResult;
       }
       throw new DispatchError('No filename or path provided for file open.');
@@ -120,6 +125,10 @@ async function dispatch(classifierResult) {
     // static-path bug where ~/Desktop ≠ actual Desktop on OneDrive-backed systems.
 
     case 'file.delete': {
+      // If caller already resolved a path (e.g. from system.select re-dispatch), skip find
+      if (params.path) {
+        return files.deleteFile({ path: params.path });
+      }
       const name = requireParam(params.name, 'filename to delete');
       console.log(`[Jarvis] file.delete: spoken="${name}" locationHint="${params.locationHint}"`);
 
@@ -129,15 +138,26 @@ async function dispatch(classifierResult) {
         findResult.data.matches.forEach((m, i) => console.log(`[Jarvis] file.delete:   candidate[${i}] score=${m.score ?? '?'} ${m.path}`));
       }
 
-      const matchResult = strictDestructiveMatch(findResult, name, 'file.delete');
+      const matchResult = strictDestructiveMatchOrAmbiguous(findResult, name, 'file.delete');
+      if (matchResult.ambiguous) return buildAmbiguousResult(matchResult.candidates, name, classifierResult);
       if (!matchResult.ok) return { ok: false, error: matchResult.error, action: '' };
 
       const match = matchResult.match;
-      console.log(`[Jarvis] file.delete: chosen path=${match.path} (score=${match.score})`);
-      return files.deleteFile({ path: match.path });
+      console.log(`[Jarvis] file.delete: chosen path=${match.path} (score=${match.score}) — deferring to confirm gate`);
+      return {
+        ok:        true,
+        _resolved: { ...classifierResult, params: { ...params, path: match.path, name: match.name } },
+        data:      { resolvedPath: match.path },
+        action:    '',
+      };
     }
 
     case 'file.rename': {
+      // If caller already resolved a path, skip find
+      if (params.path) {
+        const newName = requireParam(params.newName, 'new filename');
+        return files.renameFile({ path: params.path, newName });
+      }
       const name    = requireParam(params.name,    'filename to rename');
       const newName = requireParam(params.newName, 'new filename');
       console.log(`[Jarvis] file.rename: spoken="${name}" newName="${newName}" locationHint="${params.locationHint}"`);
@@ -148,20 +168,28 @@ async function dispatch(classifierResult) {
         findResult.data.matches.forEach((m, i) => console.log(`[Jarvis] file.rename:   candidate[${i}] score=${m.score ?? '?'} ${m.path}`));
       }
 
-      const matchResult = strictDestructiveMatch(findResult, name, 'file.rename');
+      const matchResult = strictDestructiveMatchOrAmbiguous(findResult, name, 'file.rename');
+      if (matchResult.ambiguous) return buildAmbiguousResult(matchResult.candidates, name, classifierResult);
       if (!matchResult.ok) return { ok: false, error: matchResult.error, action: '' };
 
       const match = matchResult.match;
-      console.log(`[Jarvis] file.rename: chosen path=${match.path} (score=${match.score}) → new="${newName}"`);
-      return files.renameFile({ path: match.path, newName });
+      console.log(`[Jarvis] file.rename: chosen path=${match.path} (score=${match.score}) — deferring to confirm gate`);
+      return {
+        ok:        true,
+        _resolved: { ...classifierResult, params: { ...params, path: match.path, name: match.name } },
+        data:      { resolvedPath: match.path },
+        action:    '',
+      };
     }
 
     case 'file.move': {
+      // If caller already resolved a path, skip find
+      if (params.path) {
+        const targetLocationHint = requireParam(params.targetLocationHint, 'destination location');
+        return files.moveFile({ path: params.path, targetLocationHint });
+      }
       const name               = requireParam(params.name,               'filename to move');
       const targetLocationHint = requireParam(params.targetLocationHint, 'destination location');
-      // locationHint is intentionally NOT passed for source search. extractLocation() picks
-      // up the destination keyword too ("move X to Desktop" → locationHint='desktop'),
-      // which would constrain findFiles to the wrong directory.
       console.log(`[Jarvis] file.move: spoken="${name}" → dest="${targetLocationHint}" (source search: all default roots)`);
 
       const findResult = await files.findFiles({ query: name, locationHint: undefined, _includeScores: true });
@@ -170,12 +198,18 @@ async function dispatch(classifierResult) {
         findResult.data.matches.forEach((m, i) => console.log(`[Jarvis] file.move:   candidate[${i}] score=${m.score ?? '?'} ${m.path}`));
       }
 
-      const matchResult = strictDestructiveMatch(findResult, name, 'file.move');
+      const matchResult = strictDestructiveMatchOrAmbiguous(findResult, name, 'file.move');
+      if (matchResult.ambiguous) return buildAmbiguousResult(matchResult.candidates, name, classifierResult);
       if (!matchResult.ok) return { ok: false, error: matchResult.error, action: '' };
 
       const match = matchResult.match;
-      console.log(`[Jarvis] file.move: chosen path=${match.path} (score=${match.score}) → dest="${targetLocationHint}"`);
-      return files.moveFile({ path: match.path, targetLocationHint });
+      console.log(`[Jarvis] file.move: chosen path=${match.path} (score=${match.score}) — deferring to confirm gate`);
+      return {
+        ok:        true,
+        _resolved: { ...classifierResult, params: { ...params, path: match.path, name: match.name } },
+        data:      { resolvedPath: match.path },
+        action:    '',
+      };
     }
 
     // ── System ops (PowerShell / rundll32) ───────────────────────────────────
@@ -372,6 +406,47 @@ async function dispatch(classifierResult) {
       return writeClipboard(text);
     }
 
+    // ── Disambiguation intents (M4.1) ─────────────────────────────────────────
+
+    case 'system.select': {
+      const state = context.getCandidates();
+      if (!state) {
+        return { ok: false, error: 'No pending selection. Please repeat your original command.', action: '' };
+      }
+      const { ordinal } = params;
+      if (!ordinal || ordinal < 1 || ordinal > state.candidates.length) {
+        return {
+          ok:     false,
+          error:  `Only ${state.candidates.length} option${state.candidates.length !== 1 ? 's' : ''}. Say a number from 1 to ${state.candidates.length}.`,
+          action: '',
+        };
+      }
+      const selected = state.candidates[ordinal - 1];
+      context.clearCandidates();
+      // Build a resolved classifierResult with the confirmed path injected.
+      // The pipeline will re-dispatch this with its own confirmation gate.
+      const resolved = {
+        ...state.classifiedResult,
+        params: { ...state.classifiedResult.params, path: selected.path, name: selected.name },
+      };
+      return {
+        ok:               true,
+        _resolved:        resolved,
+        data:             { selectedCandidate: selected },
+        action:           `Selected "${selected.name}".`,
+      };
+    }
+
+    case 'system.cancel': {
+      const hadCandidates = !!context.getCandidates();
+      context.clearCandidates();
+      return {
+        ok:     true,
+        action: hadCandidates ? 'Cancelled. Selection cleared.' : 'OK, cancelled.',
+        data:   { cancelled: true },
+      };
+    }
+
     // ── Unsupported ───────────────────────────────────────────────────────────
 
     case 'system.unsupported': {
@@ -404,15 +479,17 @@ function requireParam(value, label) {
 /**
  * Validate findFiles result for destructive ops (delete/rename/move).
  *
- * Requires scores via _includeScores:true. Returns { ok, match } on success
- * or { ok: false, error } when the match is missing, too fuzzy, or ambiguous.
+ * Requires scores via _includeScores:true.
+ * Returns:
+ *   { ok: true, match }               — single confident match; proceed
+ *   { ok: false, error }              — no match or confidence too low
+ *   { ok: false, ambiguous, candidates } — multiple confident matches; caller should disambiguate
  *
  * @param {ToolResult}  findResult  — result from files.findFiles({ _includeScores:true })
  * @param {string}      spokenName  — normalized spoken filename (for error messages)
  * @param {string}      opName      — 'file.delete' | 'file.rename' | 'file.move'
- * @returns {{ ok: true, match: object } | { ok: false, error: string }}
  */
-function strictDestructiveMatch(findResult, spokenName, opName) {
+function strictDestructiveMatchOrAmbiguous(findResult, spokenName, opName) {
   if (!findResult.ok || !findResult.data?.matches?.length) {
     const hint = findResult.error ? ` (${findResult.error})` : ' — check the filename and location.';
     return { ok: false, error: `Couldn't find a file named "${spokenName}"${hint}` };
@@ -435,13 +512,26 @@ function strictDestructiveMatch(findResult, spokenName, opName) {
   if (highScorers.length >= 2) {
     const names = highScorers.slice(0, 3).map((m) => `"${m.name}"`).join(', ');
     console.log(`[Jarvis] ${opName}: ambiguous — ${highScorers.length} candidates ≥ ${MIN_DESTRUCTIVE_SCORE}: ${names}`);
-    return {
-      ok:    false,
-      error: `Found multiple files matching "${spokenName}": ${names}. Please be more specific.`,
-    };
+    return { ok: false, ambiguous: true, candidates: highScorers.slice(0, 5) };
   }
 
   return { ok: true, match: top };
+}
+
+/**
+ * Build the ambiguous ToolResult returned to the pipeline when a destructive op
+ * finds multiple candidates. Also calls context.setCandidates so system.select
+ * can resolve the pending choice.
+ */
+function buildAmbiguousResult(candidates, spokenName, classifiedResult) {
+  context.setCandidates(candidates, classifiedResult);
+  const list = candidates.slice(0, 5).map((m, i) => `${i + 1}. ${m.name}`).join(', ');
+  return {
+    ok:         false,
+    ambiguous:  true,
+    candidates: candidates.slice(0, 5),
+    action:     `I found ${candidates.length} files matching "${spokenName}". Say one, two, or three: ${list}`,
+  };
 }
 
 async function dispatchBrowserShortcut(combo) {
