@@ -535,16 +535,18 @@ async function classify(transcript, llmFn) {
 
   // ── Tier 1: pattern match ──
   const lower = t.toLowerCase();
-  for (const rule of COMPILED) {
+  for (let idx = 0; idx < COMPILED.length; idx++) {
+    const rule  = COMPILED[idx];
     const match = lower.match(rule.regex) || t.match(rule.regex);
     if (match) {
       const params = rule.extract(match, t);
       return {
-        intent:       rule.intent,
-        confidence:   'pattern',
+        intent:        rule.intent,
+        confidence:    'pattern',
         params,
-        raw:          rawInput,
-        needsConfirm: rule.needsConfirm === true || inferNeedsConfirm(rule.intent, params),
+        raw:           rawInput,
+        needsConfirm:  rule.needsConfirm === true || inferNeedsConfirm(rule.intent, params),
+        _patternIndex: idx,   // diagnostic — index in COMPILED (M4.4)
       };
     }
   }

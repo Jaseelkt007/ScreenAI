@@ -23,10 +23,12 @@ const assert   = require('assert').strict;
 // Modules under test (pure Node — no Electron dependency)
 const files = require('./tools/files');
 const { resolveJarvisPath, createFile, readFile, writeFile, appendFile, listDir, createDir, LOCATION_MAP } = files;
-const { classify, splitChain, extractOrdinal } = require('./classifier');
+const { classify, splitChain, splitChainWithBareAnd, extractOrdinal, extractBrowserHint } = require('./classifier');
 const { dispatch }               = require('./dispatcher');
 const { verify }                 = require('./verifier');
 const { runPipelineFromText }    = require('./pipeline');
+const traceMod                   = require('./trace');
+const ctx                        = require('./context');
 
 // ─── Test harness ─────────────────────────────────────────────────────────────
 
@@ -3730,6 +3732,396 @@ async function runM43NaturalRefinementTests() {
   });
 }
 
+// ─── 20. Phase 4 M4.4 — Suite 18: Trace module and structured run log ────────
+
+async function runM44TraceTests() {
+
+  // ── trace.js — createTrace / builder API ─────────────────────────────────
+
+  section('20. M4.4 — Suite 18: trace.js createTrace + builder API');
+
+  await test('createTrace builds record with required fields', () => {
+    const record = traceMod.createTrace('find my CV').build();
+    assert.ok(record.id,        'must have id');
+    assert.ok(record.timestamp, 'must have timestamp');
+    assert.equal(record.rawInput, 'find my CV');
+    assert.ok('normalized'      in record, 'must have normalized');
+    assert.ok('intent'          in record, 'must have intent');
+    assert.ok('confidence'      in record, 'must have confidence');
+    assert.ok('tier'            in record, 'must have tier');
+    assert.ok('dispatchOk'     in record, 'must have dispatchOk');
+    assert.ok('verifyOk'       in record, 'must have verifyOk');
+    assert.ok(record.timings,   'must have timings');
+  });
+
+  await test('setClassification with patternIndex stores intent and patternIndex', () => {
+    const fakeResult = { intent: 'file.find', confidence: 'pattern', params: { query: 'CV' }, needsConfirm: false };
+    const record = traceMod.createTrace('find my CV')
+      .setClassification(fakeResult, 4)
+      .build();
+    assert.equal(record.intent,       'file.find');
+    assert.equal(record.patternIndex, 4);
+    assert.equal(record.confidence,   'pattern');
+    assert.equal(record.tier,         'pattern');
+  });
+
+  await test('setClassification with LLM confidence sets tier to llm', () => {
+    const fakeResult = { intent: 'file.open', confidence: 'llm', params: {}, needsConfirm: false };
+    const record = traceMod.createTrace('open the file').setClassification(fakeResult).build();
+    assert.equal(record.tier, 'llm');
+    assert.equal(record.patternIndex, null, '_patternIndex should be null for LLM');
+  });
+
+  await test('setClassification with unsupported intent sets tier to unsupported', () => {
+    const fakeResult = { intent: 'system.unsupported', confidence: 'pattern', params: {}, needsConfirm: false };
+    const record = traceMod.createTrace('blah blah').setClassification(fakeResult).build();
+    assert.equal(record.tier, 'unsupported');
+  });
+
+  await test('setClassification reads _patternIndex from result when no explicit arg', () => {
+    const fakeResult = { intent: 'app.open', confidence: 'pattern', params: {}, needsConfirm: false, _patternIndex: 12 };
+    const record = traceMod.createTrace('open notepad').setClassification(fakeResult).build();
+    assert.equal(record.patternIndex, 12);
+  });
+
+  await test('setContextUsed(null) → windowTarget/fileTarget null, hadCandidates false', () => {
+    const record = traceMod.createTrace('test').setContextUsed(null).build();
+    assert.equal(record.contextUsed.windowTarget,  null);
+    assert.equal(record.contextUsed.fileTarget,    null);
+    assert.equal(record.contextUsed.hadCandidates, false);
+  });
+
+  await test('setContextUsed with snapshot sets correct fields', () => {
+    ctx.clear();
+    ctx.setFileTarget('cv.pdf', '/docs/cv.pdf');
+    const snap = ctx.snapshot();
+    const record = traceMod.createTrace('open it').setContextUsed(snap).build();
+    assert.ok(record.contextUsed.fileTarget,   'fileTarget should be present');
+    assert.equal(record.contextUsed.fileTarget.name, 'cv.pdf');
+    assert.equal(record.contextUsed.hadCandidates,   false);
+    ctx.clear();
+  });
+
+  await test('setContextUsed with candidates in snapshot → hadCandidates true', () => {
+    ctx.clear();
+    const cands = [{ name: 'a.pdf', path: '/a.pdf', sizeBytes: 0 }];
+    ctx.setCandidates(cands, { intent: 'file.delete', params: {} });
+    const snap   = ctx.snapshot();
+    const record = traceMod.createTrace('the second one').setContextUsed(snap).build();
+    assert.equal(record.contextUsed.hadCandidates, true);
+    ctx.clear();
+  });
+
+  await test('setDispatch with ok:false and error stores dispatchOk=false and error', () => {
+    const record = traceMod.createTrace('test')
+      .setDispatch({ ok: false, error: 'File not found.' })
+      .build();
+    assert.equal(record.dispatchOk, false);
+    assert.equal(record.error, 'File not found.');
+  });
+
+  await test('setDispatch with ambiguous result stores ambiguousCount', () => {
+    const candidates = [{ name: 'a.pdf', path: '/a.pdf', sizeBytes: 0 }, { name: 'b.pdf', path: '/b.pdf', sizeBytes: 0 }];
+    const record = traceMod.createTrace('delete report')
+      .setDispatch({ ok: false, ambiguous: true, candidates })
+      .build();
+    assert.equal(record.ambiguousCount, 2);
+    assert.equal(record.dispatchOk,    false);
+  });
+
+  await test('setVerify(verified:true) → verifyOk true', () => {
+    const record = traceMod.createTrace('test')
+      .setVerify({ verified: true, method: 'file-exists' })
+      .build();
+    assert.equal(record.verifyOk, true);
+  });
+
+  await test('setVerify(verified:false) → verifyOk false', () => {
+    const record = traceMod.createTrace('test')
+      .setVerify({ verified: false, method: 'none' })
+      .build();
+    assert.equal(record.verifyOk, false);
+  });
+
+  await test('setTimings stores all timing fields', () => {
+    const record = traceMod.createTrace('test')
+      .setTimings({ classify: 1, dispatch: 22, verify: 3, tts: 240, total: 270 })
+      .build();
+    assert.equal(record.timings.classify, 1);
+    assert.equal(record.timings.dispatch, 22);
+    assert.equal(record.timings.total,    270);
+  });
+
+  await test('setChainStep stores chainStep label', () => {
+    const record = traceMod.createTrace('test').setChainStep('1 of 2').build();
+    assert.equal(record.chainStep, '1 of 2');
+  });
+
+  await test('setError stores error message', () => {
+    const record = traceMod.createTrace('test').setError('oops').build();
+    assert.equal(record.error, 'oops');
+  });
+
+  await test('build() returns frozen object', () => {
+    const record = traceMod.createTrace('test').build();
+    let threw = false;
+    try { record.intent = 'changed'; } catch { threw = true; }
+    // Either threw (strict mode) or value is unchanged (non-strict)
+    assert.ok(record.intent !== 'changed' || threw, 'object should be frozen');
+  });
+
+  // ── writeTrace — no-op when disabled ────────────────────────────────────
+
+  await test('writeTrace is no-op when jarvisTraceEnabled: false', async () => {
+    const settingsMod = require('../settings');
+    const origGet = settingsMod.getSetting.bind(settingsMod);
+    settingsMod.getSetting = (key, fallback) => key === 'jarvisTraceEnabled' ? false : origGet(key, fallback);
+    try {
+      const record = traceMod.createTrace('test').build();
+      // Should not throw or create files
+      await traceMod.writeTrace(record);
+    } finally {
+      settingsMod.getSetting = origGet;
+    }
+  });
+
+  // ── writeTrace — writes file when enabled ────────────────────────────────
+
+  await test('writeTrace writes a JSON file when jarvisTraceEnabled: true', async () => {
+    const settingsMod = require('../settings');
+    const tmpDir = path.join(os.tmpdir(), `jarvis-trace-test-${Date.now()}`);
+    const origGet = settingsMod.getSetting.bind(settingsMod);
+    settingsMod.getSetting = (key, fallback) => {
+      if (key === 'jarvisTraceEnabled') return true;
+      if (key === 'jarvisTraceDir')     return tmpDir;
+      if (key === 'jarvisTraceMaxFiles') return 200;
+      return origGet(key, fallback);
+    };
+    try {
+      const record = traceMod.createTrace('find my CV')
+        .setClassification({ intent: 'file.find', confidence: 'pattern', params: {}, needsConfirm: false }, 4)
+        .build();
+      await traceMod.writeTrace(record);
+      const files = fs.readdirSync(tmpDir).filter((f) => f.endsWith('.json'));
+      assert.equal(files.length, 1, 'exactly one trace file should be written');
+      const written = JSON.parse(fs.readFileSync(path.join(tmpDir, files[0]), 'utf8'));
+      assert.equal(written.intent, 'file.find');
+      assert.equal(written.patternIndex, 4);
+    } finally {
+      settingsMod.getSetting = origGet;
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* cleanup */ }
+    }
+  });
+
+  // ── Auto-prune ────────────────────────────────────────────────────────────
+
+  await test('writeTrace auto-prunes oldest 50 files when count >= jarvisTraceMaxFiles', async () => {
+    const settingsMod = require('../settings');
+    const tmpDir = path.join(os.tmpdir(), `jarvis-prune-test-${Date.now()}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    // Create exactly 200 dummy trace files
+    for (let i = 0; i < 200; i++) {
+      const name = `${1000000 + i}-xxxx.json`;
+      fs.writeFileSync(path.join(tmpDir, name), '{}');
+    }
+
+    const origGet = settingsMod.getSetting.bind(settingsMod);
+    settingsMod.getSetting = (key, fallback) => {
+      if (key === 'jarvisTraceEnabled')  return true;
+      if (key === 'jarvisTraceDir')      return tmpDir;
+      if (key === 'jarvisTraceMaxFiles') return 200;
+      return origGet(key, fallback);
+    };
+    try {
+      const record = traceMod.createTrace('prune test').build();
+      await traceMod.writeTrace(record);
+      const remaining = fs.readdirSync(tmpDir).filter((f) => f.endsWith('.json'));
+      // Started with 200, deleted 50, wrote 1 → 151
+      assert.ok(remaining.length <= 151, `expected ≤ 151 files, got ${remaining.length}`);
+      assert.ok(remaining.length > 0,    'should have at least the newly written file');
+    } finally {
+      settingsMod.getSetting = origGet;
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* cleanup */ }
+    }
+  });
+
+  // ── classifier _patternIndex ──────────────────────────────────────────────
+
+  section('20b. M4.4 — Suite 18: classifier _patternIndex');
+
+  await test('classifier returns _patternIndex: 0 for system.cancel (first pattern)', async () => {
+    const r = await classify('cancel', LLM_NEVER_CALLED);
+    assert.equal(r.intent,        'system.cancel');
+    assert.equal(r._patternIndex, 0, `expected 0, got ${r._patternIndex}`);
+  });
+
+  await test('classifier returns _patternIndex: 1 for system.select (second pattern)', async () => {
+    const r = await classify('one', LLM_NEVER_CALLED);
+    assert.equal(r.intent,        'system.select');
+    assert.equal(r._patternIndex, 1, `expected 1, got ${r._patternIndex}`);
+  });
+
+  await test('classifier returns a non-null _patternIndex for file.open', async () => {
+    const r = await classify('open notes.txt', LLM_NEVER_CALLED);
+    assert.ok(r.intent === 'file.open' || r.intent === 'file.read', `unexpected intent: ${r.intent}`);
+    assert.ok(r._patternIndex != null, `_patternIndex should be set, got ${r._patternIndex}`);
+  });
+
+  await test('classifier LLM fallback result has _patternIndex: undefined', async () => {
+    const llmStub = async () => ({ intent: 'file.open', confidence: 'llm', params: { name: 'test.pdf' }, needsConfirm: false, raw: 'test' });
+    const r = await classify('zzz xyzzy blorple', llmStub);
+    if (r.confidence === 'llm') {
+      assert.ok(r._patternIndex == null, '_patternIndex should not be set for LLM result');
+    }
+    // If pattern matched something, that's OK — test is about LLM result shape
+  });
+
+  await test('classifier _patternIndex increases monotonically through PATTERN_TABLE', async () => {
+    // system.cancel (0) < system.select (1): verify ordering
+    const cancel = await classify('cancel',   LLM_NEVER_CALLED);
+    const select = await classify('two',      LLM_NEVER_CALLED);
+    assert.ok(cancel._patternIndex < select._patternIndex,
+      `cancel(${cancel._patternIndex}) should have lower index than select(${select._patternIndex})`);
+  });
+
+  // ── Pipeline structured run log ──────────────────────────────────────────
+
+  section('20c. M4.4 — Suite 18: pipeline [JARVIS RUN] log');
+
+  await test('Pipeline emits [JARVIS RUN] log line for single-command runs', async () => {
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    classifierModule.classify = async () => ({ intent: 'system.volume', confidence: 'pattern', params: { action: 'mute' }, needsConfirm: false, _patternIndex: 5, raw: 'mute' });
+    dispatcherModule.dispatch = async () => ({ ok: true, action: 'Volume muted.' });
+    verifierModule.verify     = async () => ({ verified: false });
+
+    const logLines = [];
+    const origLog = console.log;
+    console.log = (...args) => { logLines.push(args.join(' ')); };
+
+    try {
+      const hudSend = () => {};
+      await runPipelineFromText('mute', hudSend, () => Promise.resolve(true));
+      assert.ok(logLines.some((l) => l.includes('[JARVIS RUN]')),
+        `expected [JARVIS RUN] in log, got:\n${logLines.join('\n')}`);
+    } finally {
+      console.log = origLog;
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ctx.clear();
+    }
+  });
+
+  await test('[JARVIS RUN] log contains intent, conf, dispatch, verify, total fields', async () => {
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    classifierModule.classify = async () => ({ intent: 'system.volume', confidence: 'pattern', params: { action: 'mute' }, needsConfirm: false, _patternIndex: 5, raw: 'mute' });
+    dispatcherModule.dispatch = async () => ({ ok: true, action: 'Volume muted.' });
+    verifierModule.verify     = async () => ({ verified: false });
+
+    const logLines = [];
+    const origLog = console.log;
+    console.log = (...args) => { logLines.push(args.join(' ')); };
+
+    try {
+      await runPipelineFromText('mute', () => {}, () => Promise.resolve(true));
+      const runLine = logLines.find((l) => l.includes('[JARVIS RUN]')) || '';
+      assert.ok(runLine.includes('intent=system.volume'), `missing intent in: ${runLine}`);
+      assert.ok(runLine.includes('conf=pattern'),         `missing conf in: ${runLine}`);
+      assert.ok(runLine.includes('dispatch=ok'),          `missing dispatch in: ${runLine}`);
+      assert.ok(runLine.includes('verify=unverified'),    `missing verify in: ${runLine}`);
+      assert.ok(runLine.includes('total='),               `missing total in: ${runLine}`);
+    } finally {
+      console.log = origLog;
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ctx.clear();
+    }
+  });
+
+  await test('[JARVIS RUN] ctx=file when file context active at classification time', async () => {
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    ctx.clear();
+    ctx.setFileTarget('cv.pdf', '/docs/cv.pdf');
+
+    classifierModule.classify = async () => ({ intent: 'file.open', confidence: 'pattern', params: { useContext: true }, needsConfirm: false, _patternIndex: 2, raw: 'open it' });
+    dispatcherModule.dispatch = async () => ({ ok: true, action: 'Opened cv.pdf.' });
+    verifierModule.verify     = async () => ({ verified: false });
+
+    const logLines = [];
+    const origLog = console.log;
+    console.log = (...args) => { logLines.push(args.join(' ')); };
+
+    try {
+      await runPipelineFromText('open it', () => {}, () => Promise.resolve(true));
+      const runLine = logLines.find((l) => l.includes('[JARVIS RUN]')) || '';
+      assert.ok(runLine.includes('ctx=file') || runLine.includes('ctx=both'),
+        `expected ctx=file or ctx=both in: ${runLine}`);
+    } finally {
+      console.log = origLog;
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ctx.clear();
+    }
+  });
+
+  await test('[JARVIS RUN] ctx=candidates when disambiguation candidates pending', async () => {
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    ctx.clear();
+    ctx.setCandidates(
+      [{ name: 'r1.pdf', path: '/r1.pdf', sizeBytes: 0 }, { name: 'r2.pdf', path: '/r2.pdf', sizeBytes: 0 }],
+      { intent: 'file.delete', params: { name: 'report' } }
+    );
+
+    classifierModule.classify = async () => ({ intent: 'system.select', confidence: 'pattern', params: { ordinal: 1 }, needsConfirm: false, _patternIndex: 1, raw: 'one' });
+    dispatcherModule.dispatch = async () => ({ ok: true, action: 'Deleted r1.pdf.' });
+    verifierModule.verify     = async () => ({ verified: false });
+
+    const logLines = [];
+    const origLog = console.log;
+    console.log = (...args) => { logLines.push(args.join(' ')); };
+
+    try {
+      await runPipelineFromText('one', () => {}, () => Promise.resolve(true));
+      const runLine = logLines.find((l) => l.includes('[JARVIS RUN]')) || '';
+      assert.ok(runLine.includes('ctx=candidates'),
+        `expected ctx=candidates in: ${runLine}`);
+    } finally {
+      console.log = origLog;
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ctx.clear();
+    }
+  });
+}
+
 // ─── Run all suites ───────────────────────────────────────────────────────────
 
 (async () => {
@@ -3756,6 +4148,7 @@ async function runM43NaturalRefinementTests() {
   await runM40ContextTests();
   await runM41DisambiguationTests();
   await runM43NaturalRefinementTests();
+  await runM44TraceTests();
 
   console.log('\n─────────────────────────────────────');
   console.log(`Results: ${passed} passed, ${failed} failed`);
@@ -3764,6 +4157,6 @@ async function runM43NaturalRefinementTests() {
     console.error('\nSome tests failed.');
     process.exit(1);
   } else {
-    console.log('\nAll tests passed. Phase 4 M4.3 complete.');
+    console.log('\nAll tests passed. Phase 4 M4.4 complete.');
   }
 })();

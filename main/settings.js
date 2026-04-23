@@ -79,7 +79,16 @@ function getDefaults() {
     // Phase 3 — Destructive operations
     jarvisDestructiveConfirm: 'always', // 'always' | 'never' (never only applies to Jarvis workspace)
     // Phase 4 — Execution context
-    jarvisContextTtlMs: 30000,          // ms before context entries expire; 0 = never
+    jarvisContextTtlMs:    30000,       // ms before context entries expire; 0 = never
+    // Phase 4 — Performance
+    jarvisPsMode:          'persistent', // 'persistent' | 'spawn'
+    jarvisFocusSettleMs:   300,          // ms to wait after app.open before HWND capture
+    // Phase 4 — Chains
+    jarvisChainMaxSteps:   2,            // max chain steps; lift to 3 for power users
+    // Phase 4 — Trace / Debug
+    jarvisTraceEnabled:    false,
+    jarvisTraceDir:        '',           // '' → ~/Documents/Jarvis/traces
+    jarvisTraceMaxFiles:   200,
   };
 }
 

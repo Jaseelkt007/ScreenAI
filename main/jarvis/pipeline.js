@@ -89,8 +89,29 @@ async function runPipelineFromAudio(audioBuffer, mimeType, hudSend, waitForConfi
 
 // ─── Single-intent flow ───────────────────────────────────────────────────────
 
-async function _runSingle(transcript, hudSend, waitForConfirm, t0) {
+async function _runSingle(transcript, hudSend, waitForConfirm, t0, chainStep) {
   const timings = {};
+
+  // ── M4.4: per-run tracking ───────────────────────────────────────────────────
+  const run = {
+    id:       _generateRunId(),
+    rawInput: transcript,
+    intent:   'unknown',
+    conf:     'pattern',
+    p:        null,
+    ctx:      'none',
+    ttl:      0,
+    ctxSnap:  null,
+    dispatch: 'skipped',
+    verify:   'skipped',
+    chainStep: chainStep || null,
+    error:    null,
+  };
+  let _classifierResult = null;
+  let _toolResult       = null;
+  let _verifierResult   = null;
+
+  try {
 
   // ── 1. Classify ─────────────────────────────────────────────────────────────
   hudSend('jarvis:status', { phase: 'classifying', transcript });
@@ -98,6 +119,16 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0) {
   const classifierResult = await classifierMod.classify(transcript);
   timings.classify = Date.now() - t1;
   logTiming('Classify', timings.classify, classifierResult.confidence);
+  _classifierResult = classifierResult;
+
+  // Capture context state immediately after classify (M4.4)
+  run.intent  = classifierResult.intent;
+  run.conf    = classifierResult.confidence;
+  run.p       = classifierResult._patternIndex != null ? classifierResult._patternIndex : null;
+  const _snap = context.snapshot();
+  run.ctx     = _computeCtxString(_snap);
+  run.ttl     = _computeTtlRemaining(_snap);
+  run.ctxSnap = _snap;
 
   // ── 2. Unsupported fast-exit ─────────────────────────────────────────────────
   if (classifierResult.intent === 'system.unsupported') {
@@ -149,14 +180,18 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0) {
     toolResult = await dispatcherMod.dispatch(classifierResult);
   } catch (err) {
     // DispatchError — param validation failure
+    run.dispatch = 'error';
+    run.error    = err.message;
     await speakAndDone(hudSend, false, err.message, err.message, timings, t0);
     return;
   }
   timings.dispatch = Date.now() - t2;
   logTiming('Dispatch', timings.dispatch);
+  _toolResult = toolResult;
 
   // ── 4b. Disambiguation: file op found multiple candidates ─────────────────
   if (!toolResult.ok && toolResult.ambiguous) {
+    run.dispatch = 'ambiguous';
     const list = (toolResult.candidates || [])
       .slice(0, 5)
       .map((c, i) => `${i + 1}. ${c.name}`)
@@ -171,9 +206,13 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0) {
   }
 
   if (!toolResult.ok) {
+    run.dispatch = 'error';
+    run.error    = toolResult.error || null;
     await speakAndDone(hudSend, false, toolResult.error, toolResult.error, timings, t0);
     return;
   }
+
+  run.dispatch = 'ok';
 
   // ── 4c. _resolved: re-dispatch with resolved target and confirmation gate ──
   // Used by system.select (ordinal selection) and by file.delete/rename/move
@@ -255,6 +294,8 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0) {
   const verifierResult = await verifierMod.verify(classifierResult, toolResult);
   timings.verify = Date.now() - t3;
   logTiming('Verify', timings.verify);
+  _verifierResult = verifierResult;
+  run.verify = verifierResult.verified ? 'ok' : 'unverified';
 
   // ── 6. Build spoken text ─────────────────────────────────────────────────────
   const display = buildDisplay(toolResult, verifierResult);
@@ -291,6 +332,14 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0) {
       ? `${verifierResult.method} (${verifierResult.detail || 'ok'})`
       : null,
   });
+
+  } finally {
+    // ── M4.4: Always emit structured run log ──────────────────────────────────
+    const totalMs = timings.total || (Date.now() - t0);
+    _emitStructuredRunLog(run, totalMs);
+    _maybeWriteTrace(run, _classifierResult, _toolResult, _verifierResult, timings, hudSend)
+      .catch(() => {});
+  }
 }
 
 // ─── M3.5: Two-step chained flow ─────────────────────────────────────────────
@@ -314,13 +363,29 @@ async function _runChained(parts, wasCapped, hudSend, waitForConfirm, t0) {
   for (let i = 0; i < parts.length; i++) {
     const stepLabel = `${i + 1} of 2`;
     const part = (parts[i] || '').trim();
+    const stepT0 = Date.now();
 
     // ── Classify ──────────────────────────────────────────────────────────────
     hudSend('jarvis:status', { phase: 'classifying', transcript: part, step: stepLabel });
     const classified = await classifierMod.classify(part);
 
+    // Capture context state and build per-step run log data (M4.4)
+    const _stepSnap = context.snapshot();
+    const stepRun = {
+      id:       _generateRunId(),
+      intent:   classified.intent,
+      conf:     classified.confidence,
+      p:        classified._patternIndex != null ? classified._patternIndex : null,
+      ctx:      _computeCtxString(_stepSnap),
+      ttl:      _computeTtlRemaining(_stepSnap),
+      dispatch: 'skipped',
+      verify:   'skipped',
+      chainStep: stepLabel,
+    };
+
     if (classified.intent === 'system.unsupported') {
       const msg = classified.reason || "I don't know how to do that yet.";
+      _emitStructuredRunLog(stepRun, Date.now() - stepT0);
       if (i === 0) {
         // Step 1 unrecognised — stop entirely, no second step
         hudSend('jarvis:done', { ok: false, display: msg });
@@ -341,6 +406,7 @@ async function _runChained(parts, wasCapped, hudSend, waitForConfirm, t0) {
       let confirmed = false;
       try { confirmed = await waitForConfirm(); } catch { confirmed = false; }
       if (!confirmed) {
+        _emitStructuredRunLog(stepRun, Date.now() - stepT0);
         if (i === 0) {
           hudSend('jarvis:done', { ok: false, display: 'Cancelled.' });
           return;
@@ -362,6 +428,8 @@ async function _runChained(parts, wasCapped, hudSend, waitForConfirm, t0) {
     try {
       toolResult = await dispatcherMod.dispatch(classified);
     } catch (err) {
+      stepRun.dispatch = 'error';
+      _emitStructuredRunLog(stepRun, Date.now() - stepT0);
       if (i === 0) {
         hudSend('jarvis:done', { ok: false, display: err.message });
         return;
@@ -372,6 +440,8 @@ async function _runChained(parts, wasCapped, hudSend, waitForConfirm, t0) {
     }
 
     if (!toolResult.ok) {
+      stepRun.dispatch = 'error';
+      _emitStructuredRunLog(stepRun, Date.now() - stepT0);
       if (i === 0) {
         const errMsg = `The first step hit a problem: ${toolResult.error}. Skipped the second step.`;
         hudSend('jarvis:done', { ok: false, display: errMsg });
@@ -382,9 +452,13 @@ async function _runChained(parts, wasCapped, hudSend, waitForConfirm, t0) {
       break;
     }
 
+    stepRun.dispatch = 'ok';
+
     // ── Verify ────────────────────────────────────────────────────────────────
     hudSend('jarvis:status', { phase: 'verifying', intent: classified.intent, step: stepLabel });
     const verifyResult = await verifierMod.verify(classified, toolResult);
+    stepRun.verify = verifyResult.verified ? 'ok' : 'unverified';
+    _emitStructuredRunLog(stepRun, Date.now() - stepT0);
     const actionStr    = buildDisplay(toolResult, verifyResult);
     actions.push(actionStr);
 
@@ -484,6 +558,68 @@ function _injectChainContext(classified, chainContext) {
   } else if (chainContext.kind === 'browser' && isBrowserShortcut && chainContext.hwnd) {
     setPendingTypeTargetWindowHandle(chainContext.hwnd);
     console.log(`[JARVIS] Chain inject: type target hwnd=${chainContext.hwnd} for browser shortcut ${intent}`);
+  }
+}
+
+// ─── M4.4: Structured run log and trace helpers ───────────────────────────────
+
+function _generateRunId() {
+  const ts   = Date.now();
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `${ts}-${rand}`;
+}
+
+function _computeCtxString(snap) {
+  const hasFile = !!(snap && snap.file);
+  const hasWin  = !!(snap && snap.window);
+  const hasCand = !!(snap && snap.candidates);
+  if (hasCand)           return 'candidates';
+  if (hasFile && hasWin) return 'both';
+  if (hasFile)           return 'file';
+  if (hasWin)            return 'window';
+  return 'none';
+}
+
+function _computeTtlRemaining(snap) {
+  if (!snap) return 0;
+  let ttl = 0;
+  if (snap.file)       ttl = Math.max(ttl, snap.file.ttlRemaining       || 0);
+  if (snap.window)     ttl = Math.max(ttl, snap.window.ttlRemaining     || 0);
+  if (snap.candidates) ttl = Math.max(ttl, snap.candidates.ttlRemaining || 0);
+  return ttl;
+}
+
+function _emitStructuredRunLog(run, totalMs) {
+  const pStr = run.p != null ? run.p : '-';
+  console.log(
+    `[JARVIS RUN] id=${run.id} intent=${run.intent} conf=${run.conf} p=${pStr}` +
+    ` ctx=${run.ctx} ttl=${run.ttl}ms dispatch=${run.dispatch} verify=${run.verify} total=${totalMs}ms`
+  );
+}
+
+async function _maybeWriteTrace(run, classifierResult, toolResult, verifierResult, timings, hudSend) {
+  const s = require('../settings');
+  if (!s.getSetting('jarvisTraceEnabled', false)) return;
+
+  try {
+    const traceMod = require('./trace');
+    const acc = traceMod.createTrace(run.rawInput);
+
+    if (classifierResult) {
+      acc.setClassification(classifierResult, classifierResult._patternIndex);
+    }
+    acc.setContextUsed(run.ctxSnap || null);
+    if (toolResult)   acc.setDispatch(toolResult);
+    if (verifierResult) acc.setVerify(verifierResult);
+    if (timings)      acc.setTimings(timings);
+    if (run.chainStep) acc.setChainStep(run.chainStep);
+    if (run.error)     acc.setError(run.error);
+
+    const record = acc.build();
+    traceMod.emitTrace(hudSend, record);
+    await traceMod.writeTrace(record);
+  } catch (err) {
+    console.warn('[pipeline] Trace build failed (non-fatal):', err.message);
   }
 }
 
