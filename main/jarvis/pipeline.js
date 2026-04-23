@@ -40,8 +40,9 @@ async function runPipelineFromText(transcript, hudSend, waitForConfirm) {
   const t0 = Date.now();
 
   try {
-    // ── M3.5: detect chain ─────────────────────────────────────────────────────
-    const { parts, wasCapped } = classifierMod.splitChain(transcript);
+    // ── M4.3: detect chain — bare "and" supported, capped at jarvisChainMaxSteps ─
+    const maxSteps = require('../settings').getSetting('jarvisChainMaxSteps', 2);
+    const { parts, wasCapped } = classifierMod.splitChainWithBareAnd(transcript, maxSteps);
 
     if (parts.length === 2) {
       return await _runChained(parts, wasCapped, hudSend, waitForConfirm, t0);

@@ -37,6 +37,13 @@ const APP_NAMES = {
   'calc':        { processName: 'Calculator',        exe: 'calc.exe' },
   'powershell':  { processName: 'powershell',        exe: 'powershell.exe' },
   'obs studio':  { processName: 'obs64',             exe: 'obs64.exe' },
+  // Phase 4 M4.3 — additional spoken aliases
+  'vs code':         { processName: 'Code',            exe: 'Code.exe' },
+  'visual studio code': { processName: 'Code',         exe: 'Code.exe' },
+  'file explorer':   { processName: 'explorer',        exe: 'explorer.exe' },
+  'task manager':    { processName: 'Taskmgr',         exe: 'Taskmgr.exe' },
+  'windows terminal': { processName: 'WindowsTerminal', exe: 'wt.exe' },
+  'powerpoint':      { processName: 'POWERPNT',        exe: 'POWERPNT.EXE' },
 };
 
 /** Set of known browser process names (lowercase). Used by isBrowserFocused(). */

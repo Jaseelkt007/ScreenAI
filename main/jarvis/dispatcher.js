@@ -91,24 +91,31 @@ async function dispatch(classifierResult) {
     }
 
     case 'file.open': {
-      if (params.path) {
-        const openResult = await files.openFile({ path: params.path });
-        if (openResult.ok && params.name) context.setFileTarget(params.name, params.path);
+      // M4.3: resolve pronoun reference ("open it") from context
+      let openParams = params;
+      if (params.useContext) {
+        const fileTarget = context.getFileTarget();
+        if (!fileTarget) {
+          return { ok: false, error: 'No recent file in context. Please say the filename explicitly.', action: '' };
+        }
+        openParams = { ...params, name: fileTarget.name, path: fileTarget.path };
+      }
+      if (openParams.path) {
+        const openResult = await files.openFile({ path: openParams.path });
+        if (openResult.ok && openParams.name) context.setFileTarget(openParams.name, openParams.path);
         return openResult;
       }
-      if (params.name) {
+      if (openParams.name) {
         const findResult = await files.findFiles({
-          query:        params.name,
-          locationHint: params.locationHint,
+          query:        openParams.name,
+          locationHint: openParams.locationHint,
         });
         if (!findResult.ok || !findResult.data || findResult.data.matches.length === 0) {
-          return { ok: false, error: `Couldn't find a file named "${params.name}".`, action: '' };
+          return { ok: false, error: `Couldn't find a file named "${openParams.name}".`, action: '' };
         }
         const matches = findResult.data.matches;
-        // Disambiguate when multiple candidates found (file.open is non-destructive
-        // but opening the wrong file is still undesirable).
         if (matches.length > 1) {
-          return buildAmbiguousResult(matches, params.name, classifierResult);
+          return buildAmbiguousResult(matches, openParams.name, classifierResult);
         }
         const openResult = await files.openFile({ path: matches[0].path });
         if (openResult.ok) context.setFileTarget(matches[0].name, matches[0].path);
@@ -125,6 +132,19 @@ async function dispatch(classifierResult) {
     // static-path bug where ~/Desktop ≠ actual Desktop on OneDrive-backed systems.
 
     case 'file.delete': {
+      // M4.3: resolve pronoun reference ("delete it") from context
+      if (params.useContext) {
+        const fileTarget = context.getFileTarget();
+        if (!fileTarget) {
+          return { ok: false, error: 'No recent file in context. Please say the filename explicitly.', action: '' };
+        }
+        return {
+          ok:        true,
+          _resolved: { ...classifierResult, params: { ...params, path: fileTarget.path, name: fileTarget.name, useContext: false } },
+          data:      { resolvedPath: fileTarget.path },
+          action:    '',
+        };
+      }
       // If caller already resolved a path (e.g. from system.select re-dispatch), skip find
       if (params.path) {
         return files.deleteFile({ path: params.path });
@@ -153,6 +173,15 @@ async function dispatch(classifierResult) {
     }
 
     case 'file.rename': {
+      // M4.3: resolve pronoun reference ("rename it to X") from context
+      if (params.useContext) {
+        const fileTarget = context.getFileTarget();
+        if (!fileTarget) {
+          return { ok: false, error: 'No recent file in context. Please say the filename explicitly.', action: '' };
+        }
+        const newName = requireParam(params.newName, 'new filename');
+        return files.renameFile({ path: fileTarget.path, newName });
+      }
       // If caller already resolved a path, skip find
       if (params.path) {
         const newName = requireParam(params.newName, 'new filename');
@@ -183,6 +212,20 @@ async function dispatch(classifierResult) {
     }
 
     case 'file.move': {
+      // M4.3: resolve pronoun reference ("move it to Desktop") from context
+      if (params.useContext) {
+        const fileTarget = context.getFileTarget();
+        if (!fileTarget) {
+          return { ok: false, error: 'No recent file in context. Please say the filename explicitly.', action: '' };
+        }
+        const targetLocationHint = requireParam(params.targetLocationHint, 'destination location');
+        return {
+          ok:        true,
+          _resolved: { ...classifierResult, params: { ...params, path: fileTarget.path, name: fileTarget.name, useContext: false } },
+          data:      { resolvedPath: fileTarget.path },
+          action:    '',
+        };
+      }
       // If caller already resolved a path, skip find
       if (params.path) {
         const targetLocationHint = requireParam(params.targetLocationHint, 'destination location');
@@ -311,11 +354,18 @@ async function dispatch(classifierResult) {
           action: '',
         };
       }
-      if (classifierResult._chainContext?.kind === 'browser' && classifierResult._chainContext.processName) {
+      // M4.3: browserHint — "go to YouTube in Edge" routes to that browser
+      const browserHint = params.browserHint;
+      const chainCtx    = classifierResult._chainContext;
+      const targetProcess = browserHint
+        ? _resolveBrowserHintProcess(browserHint)
+        : (chainCtx?.kind === 'browser' ? chainCtx.processName : null);
+
+      if (targetProcess) {
         const { navigateInWindowByProcess } = require('./tools/browser');
-        const navResult = await navigateInWindowByProcess(url, classifierResult._chainContext.processName);
+        const navResult = await navigateInWindowByProcess(url, targetProcess);
         if (navResult.ok) {
-          context.setWindowTarget(classifierResult._chainContext.processName, classifierResult._chainContext.hwnd || null, 'browser');
+          context.setWindowTarget(targetProcess, chainCtx?.hwnd || null, 'browser');
         }
         return navResult;
       }
@@ -335,11 +385,18 @@ async function dispatch(classifierResult) {
 
     case 'browser.goto': {
       const url = requireParam(params.url, 'URL');
-      if (classifierResult._chainContext?.kind === 'browser' && classifierResult._chainContext.processName) {
+      // M4.3: browserHint — "go to youtube.com in Edge" routes to that browser
+      const browserHintGoto = params.browserHint;
+      const chainCtxGoto    = classifierResult._chainContext;
+      const targetProcessGoto = browserHintGoto
+        ? _resolveBrowserHintProcess(browserHintGoto)
+        : (chainCtxGoto?.kind === 'browser' ? chainCtxGoto.processName : null);
+
+      if (targetProcessGoto) {
         const { navigateInWindowByProcess } = require('./tools/browser');
-        const navResult = await navigateInWindowByProcess(url, classifierResult._chainContext.processName);
+        const navResult = await navigateInWindowByProcess(url, targetProcessGoto);
         if (navResult.ok) {
-          context.setWindowTarget(classifierResult._chainContext.processName, classifierResult._chainContext.hwnd || null, 'browser');
+          context.setWindowTarget(targetProcessGoto, chainCtxGoto?.hwnd || null, 'browser');
         }
         return navResult;
       }
@@ -532,6 +589,19 @@ function buildAmbiguousResult(candidates, spokenName, classifiedResult) {
     candidates: candidates.slice(0, 5),
     action:     `I found ${candidates.length} files matching "${spokenName}". Say one, two, or three: ${list}`,
   };
+}
+
+/**
+ * M4.3: Map a browser hint string to a process name for navigateInWindowByProcess.
+ */
+function _resolveBrowserHintProcess(hint) {
+  const MAP = {
+    'edge':    'msedge',
+    'chrome':  'chrome',
+    'firefox': 'firefox',
+    'brave':   'brave',
+  };
+  return MAP[hint] || null;
 }
 
 async function dispatchBrowserShortcut(combo) {

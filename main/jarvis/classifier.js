@@ -49,6 +49,39 @@ const PATTERN_TABLE = [
     extract: (m, t) => ({ ordinal: extractOrdinal(t) }),
   },
 
+  // ── file.open (context pronoun: "open it", "show that file") — M4.3 ──
+  // Anchored so only fires when entire transcript is a short pronoun reference.
+  // Placed BEFORE generic file.open — more specific wins.
+  {
+    intent:  'file.open',
+    pattern: /^\s*(open|show|launch|load|display)\s+(it|that|that\s+file|the\s+file)\s*$/i,
+    extract: () => ({ useContext: true }),
+  },
+
+  // ── file.rename (context pronoun: "rename it to X") — M4.3 ──
+  {
+    intent:  'file.rename',
+    pattern: /^\s*(rename|call|name)\s+(it|that|that\s+file|the\s+file)\s+to\s+(.+)\s*$/i,
+    extract: (m) => ({ useContext: true, newName: normalizeSpokenFilename(m[3]?.trim()) }),
+    needsConfirm: true,
+  },
+
+  // ── file.delete (context pronoun: "delete it", "remove that file") — M4.3 ──
+  {
+    intent:  'file.delete',
+    pattern: /^\s*(delete|remove|erase|trash)\s+(it|that|that\s+file|the\s+file)\s*$/i,
+    extract: () => ({ useContext: true }),
+    needsConfirm: true,
+  },
+
+  // ── file.move (context pronoun: "move it to Desktop") — M4.3 ──
+  {
+    intent:  'file.move',
+    pattern: /^\s*(move|transfer|put)\s+(it|that|that\s+file|the\s+file)\s+(?:to|into)\s+(.+)\s*$/i,
+    extract: (m, t) => ({ useContext: true, targetLocationHint: extractTargetLocation(t) }),
+    needsConfirm: true,
+  },
+
   // ── file.mkdir — check before file.create to avoid "folder" matching "file" rules ──
   {
     intent:  'file.mkdir',
@@ -1055,6 +1088,71 @@ function splitChain(transcript) {
   return { parts: allParts, wasCapped: false };
 }
 
+// ─── M4.3 — Bare "and" chain splitting ───────────────────────────────────────
+
+const BARE_AND_RE = /\s+and\s+/i;
+
+/**
+ * Known file extensions used to detect filename components in bare-and splits.
+ * If either candidate part contains one of these, the split is rejected.
+ */
+const FILENAME_EXT_RE = /\.(txt|pdf|docx|xlsx|pptx|png|jpg|jpeg|md|json|csv|zip|mp4|log|html|js|py)\b/i;
+
+/**
+ * Returns true when the string contains a filename component that would make
+ * a bare "and" split unsafe (e.g. "notes and tasks.txt").
+ */
+function hasFilenameComponent(s) {
+  return FILENAME_EXT_RE.test(s);
+}
+
+/**
+ * Extended chain splitter that also handles bare " and " connectors.
+ *
+ * Strategy:
+ *  1. Try the reliable connectors first (splitChain). If they match, return immediately.
+ *  2. Only attempt bare " and " split when no reliable connector was found.
+ *  3. Guard: reject if either candidate part contains a filename extension token.
+ *  4. Cap at jarvisChainMaxSteps (default 2).
+ *
+ * splitChain is still exported and all Suite 13 tests continue to pass.
+ */
+function splitChainWithBareAnd(transcript, maxSteps) {
+  // Try reliable connectors first
+  const reliable = splitChain(transcript);
+  if (reliable.parts.length > 1) return reliable;
+
+  // Attempt bare "and" split
+  const andParts = (transcript || '').split(BARE_AND_RE);
+  if (andParts.length < 2) return { parts: [transcript || ''], wasCapped: false };
+
+  // Reject if any part looks like a filename component
+  if (andParts.some(hasFilenameComponent)) {
+    return { parts: [transcript || ''], wasCapped: false };
+  }
+
+  const cap = maxSteps || 2;
+  const result  = andParts.slice(0, cap);
+  const wasCapped = andParts.length > cap;
+  return { parts: result, wasCapped };
+}
+
+// ─── M4.3 — Browser hint extraction ──────────────────────────────────────────
+
+/**
+ * Extract an explicit browser hint from phrases like "go to YouTube in Edge"
+ * or "open Gmail using Chrome".
+ * Returns 'edge' | 'chrome' | 'firefox' | null.
+ */
+function extractBrowserHint(t) {
+  const lower = t.toLowerCase();
+  if (/\bin\s+edge\b|\busing\s+edge\b/.test(lower))    return 'edge';
+  if (/\bin\s+chrome\b|\busing\s+chrome\b/.test(lower)) return 'chrome';
+  if (/\bin\s+firefox\b|\busing\s+firefox\b/.test(lower)) return 'firefox';
+  if (/\bin\s+brave\b|\busing\s+brave\b/.test(lower))   return 'brave';
+  return null;
+}
+
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
-module.exports = { classify, splitChain, extractOrdinal };
+module.exports = { classify, splitChain, splitChainWithBareAnd, extractBrowserHint, extractOrdinal };

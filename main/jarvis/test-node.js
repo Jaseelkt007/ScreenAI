@@ -3484,6 +3484,252 @@ async function runM41DisambiguationTests() {
   });
 }
 
+// ─── 19. Phase 4 M4.3 — Suite 17: Natural Command Refinement ─────────────────
+
+async function runM43NaturalRefinementTests() {
+  const { classify, splitChain, splitChainWithBareAnd, extractBrowserHint } = require('./classifier');
+  const ctx = require('./context');
+
+  // ── splitChainWithBareAnd ──────────────────────────────────────────────────
+
+  section('19. M4.3 — Suite 17: splitChainWithBareAnd');
+
+  test('bare "and" splits "Open Chrome and go to YouTube" into 2 parts', () => {
+    const { parts, wasCapped } = splitChainWithBareAnd('Open Chrome and go to YouTube');
+    assert.equal(parts.length, 2, 'should produce 2 parts');
+    assert.equal(wasCapped, false);
+    assert.ok(parts[0].trim().toLowerCase().includes('open chrome'));
+    assert.ok(parts[1].trim().toLowerCase().includes('go to youtube'));
+  });
+
+  test('bare "and" with filename component is NOT split ("rename notes and tasks.txt to archive.txt")', () => {
+    const { parts } = splitChainWithBareAnd('rename notes and tasks.txt to archive.txt');
+    assert.equal(parts.length, 1, 'should not split when filename extension found');
+  });
+
+  test('bare "and" with extension in second part is NOT split', () => {
+    const { parts } = splitChainWithBareAnd('find report and open summary.pdf');
+    assert.equal(parts.length, 1);
+  });
+
+  test('reliable connector takes priority over bare "and"', () => {
+    const { parts } = splitChainWithBareAnd('open Chrome and then go to YouTube');
+    assert.equal(parts.length, 2);
+    // splitChain matched "and then" — parts should differ from bare-and split
+  });
+
+  test('no "and" → single part, wasCapped false', () => {
+    const { parts, wasCapped } = splitChainWithBareAnd('mute');
+    assert.equal(parts.length, 1);
+    assert.equal(wasCapped, false);
+  });
+
+  test('three-part bare "and" capped at default 2 with wasCapped:true', () => {
+    const { parts, wasCapped } = splitChainWithBareAnd('open A and open B and open C');
+    assert.equal(parts.length, 2);
+    assert.equal(wasCapped, true);
+  });
+
+  test('three-part bare "and" with maxSteps=3 yields 3 parts', () => {
+    const { parts, wasCapped } = splitChainWithBareAnd('open A and open B and open C', 3);
+    assert.equal(parts.length, 3);
+    assert.equal(wasCapped, false);
+  });
+
+  test('splitChain still works and exports are unchanged', () => {
+    const { parts } = splitChain('open Chrome and then go to YouTube');
+    assert.equal(parts.length, 2);
+  });
+
+  // ── extractBrowserHint ────────────────────────────────────────────────────
+
+  section('19b. M4.3 — Suite 17: extractBrowserHint');
+
+  test('extractBrowserHint "go to YouTube in Edge" → "edge"', () => {
+    assert.equal(extractBrowserHint('go to YouTube in Edge'), 'edge');
+  });
+
+  test('extractBrowserHint "open Gmail using Chrome" → "chrome"', () => {
+    assert.equal(extractBrowserHint('open Gmail using Chrome'), 'chrome');
+  });
+
+  test('extractBrowserHint "open Gmail in Firefox" → "firefox"', () => {
+    assert.equal(extractBrowserHint('open Gmail in Firefox'), 'firefox');
+  });
+
+  test('extractBrowserHint "open Gmail" → null', () => {
+    assert.equal(extractBrowserHint('open Gmail'), null);
+  });
+
+  test('extractBrowserHint "open Gmail in brave" → "brave"', () => {
+    assert.equal(extractBrowserHint('open Gmail in brave'), 'brave');
+  });
+
+  // ── Pronoun patterns ──────────────────────────────────────────────────────
+
+  section('19c. M4.3 — Suite 17: pronoun classifier patterns');
+
+  test('"open it" → file.open { useContext: true }', async () => {
+    const r = await classify('open it');
+    assert.equal(r.intent, 'file.open');
+    assert.equal(r.params.useContext, true);
+    assert.equal(r.confidence, 'pattern');
+  });
+
+  test('"show that file" → file.open { useContext: true }', async () => {
+    const r = await classify('show that file');
+    assert.equal(r.intent, 'file.open');
+    assert.equal(r.params.useContext, true);
+  });
+
+  test('"rename it to final.txt" → file.rename { useContext:true, newName:"final.txt" }', async () => {
+    const r = await classify('rename it to final.txt');
+    assert.equal(r.intent, 'file.rename');
+    assert.equal(r.params.useContext, true);
+    assert.equal(r.params.newName, 'final.txt');
+    assert.equal(r.needsConfirm, true);
+  });
+
+  test('"delete it" → file.delete { useContext: true }, needsConfirm', async () => {
+    const r = await classify('delete it');
+    assert.equal(r.intent, 'file.delete');
+    assert.equal(r.params.useContext, true);
+    assert.equal(r.needsConfirm, true);
+  });
+
+  test('"remove that file" → file.delete { useContext: true }', async () => {
+    const r = await classify('remove that file');
+    assert.equal(r.intent, 'file.delete');
+    assert.equal(r.params.useContext, true);
+  });
+
+  test('"move it to Desktop" → file.move { useContext:true, targetLocationHint:"desktop" }', async () => {
+    const r = await classify('move it to Desktop');
+    assert.equal(r.intent, 'file.move');
+    assert.equal(r.params.useContext, true);
+    assert.equal(r.params.targetLocationHint, 'desktop');
+    assert.equal(r.needsConfirm, true);
+  });
+
+  test('"open it somewhat please" does NOT match pronoun pattern (not anchored)', async () => {
+    const r = await classify('open it somewhat please');
+    // Should NOT be file.open useContext — anchored pattern requires short bare form
+    assert.ok(r.intent !== 'file.open' || r.params.useContext !== true,
+      'long phrase should not fire pronoun pattern');
+  });
+
+  test('"open one drive" does NOT trigger system.select (ordinal guard)', async () => {
+    const r = await classify('open one drive');
+    assert.notEqual(r.intent, 'system.select', '"one" inside a longer phrase should not fire system.select');
+  });
+
+  // ── New APP_NAMES aliases ─────────────────────────────────────────────────
+
+  section('19d. M4.3 — Suite 17: new app name aliases');
+
+  test('"open vs code" → app.open, appName contains "vs code"', async () => {
+    const r = await classify('open vs code');
+    assert.equal(r.intent, 'app.open');
+    assert.ok(r.params.appName && r.params.appName.toLowerCase().includes('vs code'),
+      `expected "vs code" in appName, got "${r.params.appName}"`);
+  });
+
+  test('"open task manager" → app.open', async () => {
+    const r = await classify('open task manager');
+    assert.equal(r.intent, 'app.open');
+    assert.ok(r.params.appName && r.params.appName.toLowerCase().includes('task manager'),
+      `expected "task manager" in appName, got "${r.params.appName}"`);
+  });
+
+  test('"open powerpoint" → app.open', async () => {
+    const r = await classify('open powerpoint');
+    assert.equal(r.intent, 'app.open');
+    assert.ok(r.params.appName && r.params.appName.toLowerCase().includes('powerpoint'),
+      `expected "powerpoint" in appName, got "${r.params.appName}"`);
+  });
+
+  test('"close calculator" → app.close', async () => {
+    const r = await classify('close calculator');
+    assert.equal(r.intent, 'app.close');
+    assert.ok(r.params.appName && r.params.appName.toLowerCase().includes('calculator'),
+      `expected "calculator" in appName, got "${r.params.appName}"`);
+  });
+
+  test('"open explorer" → app.open (file explorer alias without "file" word collision)', async () => {
+    const r = await classify('open explorer');
+    assert.equal(r.intent, 'app.open');
+    assert.ok(r.params.appName && r.params.appName.toLowerCase().includes('explorer'),
+      `expected "explorer" in appName, got "${r.params.appName}"`);
+  });
+
+  // ── Dispatcher useContext resolution ──────────────────────────────────────
+
+  section('19e. M4.3 — Suite 17: dispatcher useContext resolution');
+
+  test('file.open { useContext:true } with no context → clean error', async () => {
+    const dispatcherModule = require('./dispatcher');
+    ctx.clear();
+    const result = await dispatcherModule.dispatch({
+      intent: 'file.open',
+      params: { useContext: true },
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.error && result.error.toLowerCase().includes('context'),
+      `expected context error, got: "${result.error}"`);
+  });
+
+  test('file.rename { useContext:true } with no context → clean error', async () => {
+    const dispatcherModule = require('./dispatcher');
+    ctx.clear();
+    const result = await dispatcherModule.dispatch({
+      intent: 'file.rename',
+      params: { useContext: true, newName: 'new.txt' },
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.error && result.error.toLowerCase().includes('context'));
+  });
+
+  test('file.delete { useContext:true } with no context → clean error', async () => {
+    const dispatcherModule = require('./dispatcher');
+    ctx.clear();
+    const result = await dispatcherModule.dispatch({
+      intent: 'file.delete',
+      params: { useContext: true },
+      needsConfirm: true,
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.error && result.error.toLowerCase().includes('context'));
+  });
+
+  test('file.move { useContext:true } with no context → clean error', async () => {
+    const dispatcherModule = require('./dispatcher');
+    ctx.clear();
+    const result = await dispatcherModule.dispatch({
+      intent: 'file.move',
+      params: { useContext: true, targetLocationHint: 'desktop' },
+      needsConfirm: true,
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.error && result.error.toLowerCase().includes('context'));
+  });
+
+  test('file.delete { useContext:true } with file context → returns _resolved with path', async () => {
+    const dispatcherModule = require('./dispatcher');
+    ctx.clear();
+    ctx.setFileTarget('cv.pdf', '/home/user/Documents/cv.pdf');
+    const result = await dispatcherModule.dispatch({
+      intent: 'file.delete',
+      params: { useContext: true },
+      needsConfirm: true,
+    });
+    ctx.clear();
+    assert.equal(result.ok, true);
+    assert.ok(result._resolved, 'should return _resolved for pipeline to handle');
+    assert.equal(result._resolved.params.path, '/home/user/Documents/cv.pdf');
+    assert.equal(result._resolved.params.name, 'cv.pdf');
+  });
+}
+
 // ─── Run all suites ───────────────────────────────────────────────────────────
 
 (async () => {
@@ -3509,6 +3755,7 @@ async function runM41DisambiguationTests() {
   await runM35ChainTests();
   await runM40ContextTests();
   await runM41DisambiguationTests();
+  await runM43NaturalRefinementTests();
 
   console.log('\n─────────────────────────────────────');
   console.log(`Results: ${passed} passed, ${failed} failed`);
@@ -3517,6 +3764,6 @@ async function runM41DisambiguationTests() {
     console.error('\nSome tests failed.');
     process.exit(1);
   } else {
-    console.log('\nAll tests passed. Phase 4 M4.1 complete.');
+    console.log('\nAll tests passed. Phase 4 M4.3 complete.');
   }
 })();
