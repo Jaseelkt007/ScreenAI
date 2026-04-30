@@ -9,7 +9,12 @@
  * ElevenLabs docs: https://elevenlabs.io/docs/api-reference/text-to-speech
  */
 
-const fetch    = require('node-fetch');
+// node-fetch v3 is ESM-only — load lazily.
+let _fetchPromise = null;
+function getFetch() {
+  if (!_fetchPromise) _fetchPromise = import('node-fetch').then((m) => m.default);
+  return _fetchPromise;
+}
 const settings = require('./settings');
 
 const TTS_BASE = 'https://api.elevenlabs.io/v1/text-to-speech';
@@ -32,12 +37,13 @@ async function synthesizeSpeech(text, opts = {}) {
     throw new Error('Cannot synthesize empty text.');
   }
 
-  const voiceId = opts.voiceId || settings.getSetting('voiceId', 'onwK4e9ZLuTAKqWW03F9');
+  const voiceId = opts.voiceId || settings.getSetting('voiceId', 'EXAVITQu4vr4xnSDxMaL');
   const url = `${TTS_BASE}/${voiceId}`;
 
   console.log(`[TTS] Synthesizing ${text.length} chars with voice ${voiceId}`);
   const t0 = Date.now();
 
+  const fetch = await getFetch();
   const response = await fetch(url, {
     method:  'POST',
     headers: {
@@ -86,11 +92,12 @@ async function streamSpeech(text, onChunk, opts = {}) {
   if (!apiKey) throw new Error('No ElevenLabs API key configured. Open Settings to add one.');
   if (!text || !text.trim()) throw new Error('Cannot synthesize empty text.');
 
-  const voiceId = opts.voiceId || settings.getSetting('voiceId', 'onwK4e9ZLuTAKqWW03F9');
+  const voiceId = opts.voiceId || settings.getSetting('voiceId', 'EXAVITQu4vr4xnSDxMaL');
   const url = `${TTS_BASE}/${voiceId}/stream`;
 
   console.log(`[TTS] Streaming ${text.length} chars with voice ${voiceId}`);
 
+  const fetch = await getFetch();
   const response = await fetch(url, {
     method:  'POST',
     headers: {

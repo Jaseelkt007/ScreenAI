@@ -10,7 +10,12 @@
  * OpenAI docs:  https://platform.openai.com/docs/api-reference/chat
  */
 
-const fetch    = require('node-fetch');
+// node-fetch v3 is ESM-only — import lazily inside async functions.
+let _fetchPromise = null;
+function getFetch() {
+  if (!_fetchPromise) _fetchPromise = import('node-fetch').then((m) => m.default);
+  return _fetchPromise;
+}
 const Jimp     = require('jimp');
 const settings = require('./settings');
 
@@ -72,6 +77,7 @@ async function streamGemini(imageBuffer, prompt, history, onChunk, model) {
 
   console.log(`[LLM] Gemini stream → ${model}`);
 
+  const fetch = await getFetch();
   const response = await fetch(url, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
@@ -162,6 +168,7 @@ async function streamOpenAI(imageBuffer, prompt, history, onChunk, model) {
 
   console.log(`[LLM] OpenAI stream → ${model}`);
 
+  const fetch = await getFetch();
   const response = await fetch(url, {
     method:  'POST',
     headers: {
@@ -331,6 +338,7 @@ async function fetchVoiceGuideGemini(imageBuffer, transcript, model) {
     ],
   };
 
+  const fetch = await getFetch();
   const response = await fetch(url, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
@@ -364,6 +372,7 @@ async function fetchVoiceGuideOpenAI(imageBuffer, transcript, model) {
     },
   ];
 
+  const fetch = await getFetch();
   const response = await fetch(`${OPENAI_API_BASE}/chat/completions`, {
     method:  'POST',
     headers: {
@@ -449,4 +458,179 @@ function clamp01(v) {
   return Math.min(1, Math.max(0, n));
 }
 
-module.exports = { streamLLM, getVoiceGuide };
+// ─── M4.5: Tool-calling helper for the agent ─────────────────────────────────
+
+/**
+ * Call a Gemini-family LLM with function-calling enabled. Used by the M4.5
+ * agent layer in main/jarvis/agent.js.
+ *
+ * Supports:
+ *   - Initial user-only prompt
+ *   - Multi-turn function-calling loops (caller appends tool responses)
+ *
+ * @param {object}  args
+ * @param {string}  args.model              — e.g. 'gemini-2.5-flash'
+ * @param {string}  args.systemPrompt       — system instruction text
+ * @param {Array}   args.contents           — Gemini "contents" array (role/parts)
+ * @param {Array}   args.functionDeclarations — array from toolSchemas.toGeminiFunctionDeclarations()
+ * @param {string}  [args.apiKey]           — overrides settings.getApiKey()
+ * @param {AbortSignal} [args.signal]
+ * @param {number}  [args.timeoutMs=4000]
+ * @param {number}  [args.temperature=0.1]
+ * @param {Function}[args.fetchImpl]        — for tests; defaults to global fetch
+ * @returns {Promise<{ functionCall: {name,args}|null, text: string|null, raw: object }>}
+ */
+async function callWithTools({
+  model = 'gemini-2.5-flash',
+  systemPrompt,
+  contents,
+  functionDeclarations,
+  apiKey,
+  signal,
+  timeoutMs = 4000,
+  temperature = 0.1,
+  fetchImpl,
+} = {}) {
+  const key  = apiKey || settings.getApiKey();
+  if (!key) throw new Error('No Gemini API key configured.');
+  if (!Array.isArray(contents)) throw new Error('callWithTools: contents must be an array');
+
+  const url  = `${GEMINI_API_BASE}/models/${model}:generateContent?key=${key}`;
+  const body = {
+    contents,
+    generationConfig: { temperature, maxOutputTokens: 512 },
+  };
+  if (systemPrompt) {
+    body.system_instruction = { parts: [{ text: systemPrompt }] };
+  }
+  if (Array.isArray(functionDeclarations) && functionDeclarations.length > 0) {
+    body.tools = [{ function_declarations: functionDeclarations }];
+    body.tool_config = { function_calling_config: { mode: 'AUTO' } };
+  }
+
+  const controller = new AbortController();
+  const timer      = setTimeout(() => controller.abort(), timeoutMs);
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+
+  const doFetch = fetchImpl || (typeof fetch === 'function' ? fetch : await getFetch());
+
+  try {
+    const res = await doFetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+      signal:  controller.signal,
+    });
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '(no body)');
+      throw new Error(`Gemini tool-call error [${res.status}]: ${errBody.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    return parseGeminiToolResponse(data);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Parse a Gemini generateContent response into either a functionCall or text.
+ * Exported separately so tests can drive the parser directly without HTTP.
+ */
+function parseGeminiToolResponse(data) {
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  for (const p of parts) {
+    if (p.functionCall && p.functionCall.name) {
+      return {
+        functionCall: {
+          name: p.functionCall.name,
+          args: p.functionCall.args || {},
+        },
+        text: null,
+        raw:  data,
+      };
+    }
+  }
+  const text = parts.map((p) => p.text || '').join('').trim();
+  return { functionCall: null, text: text || null, raw: data };
+}
+
+// ─── M5.0: Structured-JSON helper for the planner ────────────────────────────
+
+/**
+ * Call a Gemini-family LLM with a system prompt + user prompt and ask it to
+ * return JSON matching a given (informal) shape. Used by the planner in
+ * main/jarvis/planner.js.
+ *
+ * @param {object}  args
+ * @param {string}  args.model
+ * @param {string}  args.systemPrompt
+ * @param {string}  args.userPrompt
+ * @param {string}  [args.apiKey]
+ * @param {AbortSignal} [args.signal]
+ * @param {number}  [args.timeoutMs=8000]
+ * @param {number}  [args.temperature=0.2]
+ * @param {Function}[args.fetchImpl]
+ * @returns {Promise<{ json: object|null, text: string, raw: object }>}
+ */
+async function callForJson({
+  model = 'gemini-2.5-flash',
+  systemPrompt,
+  userPrompt,
+  apiKey,
+  signal,
+  timeoutMs = 8000,
+  temperature = 0.2,
+  fetchImpl,
+} = {}) {
+  const key = apiKey || settings.getApiKey();
+  if (!key) throw new Error('No Gemini API key configured.');
+  if (!userPrompt) throw new Error('callForJson: userPrompt required');
+
+  const url  = `${GEMINI_API_BASE}/models/${model}:generateContent?key=${key}`;
+  const body = {
+    contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+    generationConfig: {
+      temperature,
+      maxOutputTokens:  1536,
+      responseMimeType: 'application/json',
+    },
+  };
+  if (systemPrompt) body.system_instruction = { parts: [{ text: systemPrompt }] };
+
+  const controller = new AbortController();
+  const timer      = setTimeout(() => controller.abort(), timeoutMs);
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+  const doFetch = fetchImpl || (typeof fetch === 'function' ? fetch : await getFetch());
+
+  try {
+    const res = await doFetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+      signal:  controller.signal,
+    });
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '(no body)');
+      throw new Error(`Gemini JSON error [${res.status}]: ${errBody.slice(0, 200)}`);
+    }
+    const data  = await res.json();
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    const text  = parts.map((p) => p.text || '').join('').trim();
+    let json    = null;
+    if (text) {
+      const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+      try { json = JSON.parse(cleaned); } catch { json = null; }
+    }
+    return { json, text, raw: data };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+module.exports = { streamLLM, getVoiceGuide, callWithTools, callForJson, parseGeminiToolResponse };

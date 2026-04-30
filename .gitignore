@@ -37,7 +37,7 @@ buildResources/
 phase_1.md
 phase_2.md
 phase_3.md
-phase_4.md
+# phase_4.md
 # Duplicate/backup icon files (source icon should be icon.png)
 icon (*).png
 .agents/

@@ -13,15 +13,20 @@
     "build:win": "electron-builder --win -c.win.signAndEditExecutable=false",
     "build:win:full": "electron-builder --win",
     "build:mac": "electron-builder --mac",
-    "build": "electron-builder --win --mac"
+    "build": "electron-builder --win --mac",
+    "postinstall": "electron-rebuild -f -w uiohook-napi",
+    "rebuild": "electron-rebuild -f -w uiohook-napi"
   },
   "dependencies": {
+    "chrome-remote-interface": "^0.33.2",
     "form-data": "^4.0.5",
     "jimp": "1.6.1",
     "node-fetch": "3.3.2",
-    "screenshot-desktop": "^1.15.3"
+    "screenshot-desktop": "^1.15.3",
+    "uiohook-napi": "^1.5.4"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.6.0",
     "electron": "^29.4.6",
     "electron-builder": "^24.13.3"
   },

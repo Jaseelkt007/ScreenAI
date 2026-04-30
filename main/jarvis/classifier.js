@@ -49,6 +49,25 @@ const PATTERN_TABLE = [
     extract: (m, t) => ({ ordinal: extractOrdinal(t) }),
   },
 
+  // ── system.repeat — "do that again" / "repeat that" ─ M4.8 ─────────────────
+  // Anchored to whole transcript so it can't accidentally hit during longer
+  // commands. Routes via dispatcher → context.getLastAction() → re-dispatch.
+  {
+    intent:  'system.repeat',
+    pattern: /^\s*(?:do\s+that\s+again|do\s+it\s+again|repeat\s+that|again|once\s+more)\s*$/i,
+    extract: () => ({}),
+  },
+
+  // ── system.undo — "undo that" / "revert that" ─ M4.8 ───────────────────────
+  // Bare "undo" is intentionally NOT matched here: it stays mapped to the
+  // legacy input.shortcut → ctrl+z (covered by M2 NAMED_SHORTCUTS). When the
+  // user wants the M4.8 conversational semantics, "undo that" is the form.
+  {
+    intent:  'system.undo',
+    pattern: /^\s*(?:undo\s+that|revert\s+that)\s*$/i,
+    extract: () => ({}),
+  },
+
   // ── file.open (context pronoun: "open it", "show that file") — M4.3 ──
   // Anchored so only fires when entire transcript is a short pronoun reference.
   // Placed BEFORE generic file.open — more specific wins.
@@ -80,6 +99,85 @@ const PATTERN_TABLE = [
     pattern: /^\s*(move|transfer|put)\s+(it|that|that\s+file|the\s+file)\s+(?:to|into)\s+(.+)\s*$/i,
     extract: (m, t) => ({ useContext: true, targetLocationHint: extractTargetLocation(t) }),
     needsConfirm: true,
+  },
+
+  // ── ui.click — M4.6, generic UI control via UIAutomation ───────────────────
+  // "click Send", "tap save", "press the OK button". Anchored to whole transcript.
+  // "press <key>" without "the" still routes to input.key (later in table) because
+  // the leading "press" branch here REQUIRES "the".
+  // The classifier matches on `lower` first, so we re-extract from `t` to keep
+  // the user's original case (UIA element names are case-sensitive).
+  {
+    intent:  'ui.click',
+    pattern: /^\s*(?:(?:click|tap)\s+(?:on\s+)?(?:the\s+)?|press\s+the\s+)(.+?)(?:\s+(?:button|link|tab|menu|item|option|control))?\s*$/i,
+    extract: (m, t) => {
+      const orig = t.match(/^\s*(?:(?:click|tap)\s+(?:on\s+)?(?:the\s+)?|press\s+the\s+)(.+?)(?:\s+(?:button|link|tab|menu|item|option|control))?\s*$/i);
+      return { name: ((orig && orig[1]) || m[1] || '').trim() };
+    },
+  },
+
+  // ── ui.fill — M4.6, fill an edit control by name ───────────────────────────
+  // "fill subject with hello", "type hello in subject", "type hello into the body".
+  // Placed BEFORE input.type so "type X in Y" routes to ui.fill, while bare
+  // "type X" still lands on input.type at the end of the table.
+  {
+    intent:  'ui.fill',
+    pattern: /^\s*fill\s+(?:in\s+|out\s+)?(?:the\s+)?(.+?)\s+with\s+(.+?)\s*$/i,
+    extract: (m, t) => {
+      const orig = t.match(/^\s*fill\s+(?:in\s+|out\s+)?(?:the\s+)?(.+?)\s+with\s+(.+?)\s*$/i);
+      return {
+        name:  stripWrapPunct(((orig && orig[1]) || m[1] || '').trim()),
+        value: stripWrapPunct(((orig && orig[2]) || m[2] || '').trim()),
+      };
+    },
+  },
+  {
+    intent:  'ui.fill',
+    pattern: /^\s*type\s+(.+?)\s+in(?:to)?\s+(?:the\s+)?(.+?)\s*$/i,
+    extract: (m, t) => {
+      const orig = t.match(/^\s*type\s+(.+?)\s+in(?:to)?\s+(?:the\s+)?(.+?)\s*$/i);
+      return {
+        name:  stripWrapPunct(((orig && orig[2]) || m[2] || '').trim()),
+        value: stripWrapPunct(((orig && orig[1]) || m[1] || '').trim()),
+      };
+    },
+  },
+
+  // ── ui.read ("what does X say") — M4.6 ─────────────────────────────────────
+  // The "what does X say" form has no collision with file.read patterns and is
+  // anchored, so it can stay near the top. The "read the X field" form below
+  // is placed AFTER file.read to let "read the file called notes.txt" resolve
+  // to file.read first.
+  {
+    intent:  'ui.read',
+    pattern: /^\s*what\s+does\s+(?:the\s+)?(.+?)\s+say\s*\??\s*$/i,
+    extract: (m, t) => {
+      const orig = t.match(/^\s*what\s+does\s+(?:the\s+)?(.+?)\s+say\s*\??\s*$/i);
+      return { name: ((orig && orig[1]) || m[1] || '').trim() };
+    },
+  },
+
+  // ── app.close — before file patterns to prevent "close file explorer" → file.read ──
+  {
+    intent:  'app.close',
+    pattern: new RegExp(`\\b(close|quit|exit|terminate|shut\\s+down)\\b.{0,40}\\b(${APP_NAMES_ALTS})\\b`, 'i'),
+    extract: (m, t) => ({ appName: extractTargetAppName(t) }),
+  },
+
+  // ── app.focus — before file patterns for same reason ──
+  {
+    intent:  'app.focus',
+    pattern: new RegExp(`\\b(focus|switch\\s+to|bring(?:\\s+up)?|show|foreground|go\\s+to)\\b.{0,40}\\b(${APP_NAMES_ALTS})\\b`, 'i'),
+    extract: (m, t) => ({ appName: extractTargetAppName(t) }),
+  },
+
+  // ── app.open — before file.read so "open file explorer" → app.open, not file.read ──
+  {
+    intent:  'app.open',
+    pattern: new RegExp(`\\b(open|launch|start|run)\\b.{0,30}\\b(${APP_NAMES_ALTS})\\b`, 'i'),
+    extract: (m, t) => ({
+      appName: extractTargetAppName(t) || extractAppName(t),
+    }),
   },
 
   // ── file.mkdir — check before file.create to avoid "folder" matching "file" rules ──
@@ -149,11 +247,19 @@ const PATTERN_TABLE = [
   },
 
   // ── file.read ──
+  // M4.9 fix — three lookaheads (verb + file-keyword + extension) so the
+  // pattern fires only when ALL three are present (in any order). This keeps:
+  //   "show me the contents of document.txt"   → file.read   ✓
+  //   "open the file named readme.md"          → file.read   ✓
+  //   "read the file called notes.txt"         → file.read   ✓
+  //   "show budget.xlsx"                       → file.open  (no "file" keyword)
+  //   "open notes.txt"                         → file.open  (no "file" keyword)
+  //   "open the latest PDF in my document folder" → agent   (no `.ext`)
   {
     intent:  'file.read',
-    pattern: /\b(read|open|show|display|print)\b.{0,40}\b(file|document|content|text)\b/i,
+    pattern: /^(?=.*\b(read|open|show|display|print)\b)(?=.*\b(file|document|content|text|contents)\b)(?=.*\.(?:txt|md|pdf|json|csv|log|docx|xlsx|html|js|py)\b).*$/i,
     extract: (m, t) => ({
-      name:         ensureExtension(extractName(t) || extractAfterKeyword(t, ['file', 'document', 'called', 'named']) || ''),
+      name:         ensureExtension(extractName(t) || extractAfterKeyword(t, ['file', 'document', 'called', 'named']) || extractFilenameWithExt(t) || ''),
       locationHint: extractLocation(t),
     }),
   },
@@ -166,6 +272,18 @@ const PATTERN_TABLE = [
       name:         extractFilenameWithExt(t),
       locationHint: extractLocation(t),
     }),
+  },
+
+  // ── ui.read ("read the X field/value/...") — M4.6 ──────────────────────────
+  // Mandatory trailing role keyword keeps this from swallowing file refs like
+  // "read the file called notes.txt" (file.read above wins for those).
+  {
+    intent:  'ui.read',
+    pattern: /^\s*read\s+the\s+(.+?)\s+(?:value|text|field|content|status)\s*$/i,
+    extract: (m, t) => {
+      const orig = t.match(/^\s*read\s+the\s+(.+?)\s+(?:value|text|field|content|status)\s*$/i);
+      return { name: ((orig && orig[1]) || m[1] || '').trim() };
+    },
   },
 
   // ── file.list ──
@@ -197,7 +315,11 @@ const PATTERN_TABLE = [
   // common document nouns so "find resume on desktop" and "find cover letter" both match.
   {
     intent:  'file.find',
-    pattern: /\b(find|locate|search for|look for|where is|where'?s)\b.{0,50}\b(file|document|doc|pdf|image|photo|video|spreadsheet|my|the|desktop|documents|downloads|jarvis|resume|cv|letter|report|notes|invoice|contract|budget|presentation|thesis|slides|receipt|agreement)\b/i,
+    pattern: /\b(find|locate|search for|look for|where is|where'?s)\b.{0,50}\b(file|document|doc|pdf|image|photo|video|spreadsheet|desktop|documents|downloads|jarvis|resume|cv|letter|report|notes|invoice|contract|budget|presentation|thesis|slides|receipt|agreement)\b/i,
+    // Skip when the transcript is clearly a web/info query — prevents
+    // "look for the latest news" from matching via the verb + a generic
+    // noun. These phrases belong to browser.search / web.search.
+    skipIf: /\b(news|headlines?|weather|forecast|stocks?|scores?|happening|traffic|recipe|recipes|lyrics|definition|meaning|trending)\b/i,
     extract: (m, t) => ({
       query:        extractFindQuery(t),
       extension:    extractExtension(t),
@@ -213,6 +335,19 @@ const PATTERN_TABLE = [
       query:        extractFilenameWithExtExpanded(t),
       locationHint: extractLocation(t),
     }),
+  },
+
+  // ── file.delete (document-alias: "delete report", "remove notes") ──
+  // Handles delete + common document noun without "file" keyword or extension.
+  // Must be before the generic file.delete pattern to keep needsConfirm consistent.
+  {
+    intent:  'file.delete',
+    pattern: /\b(delete|remove|erase|trash)\b.{0,40}\b(cv|resume|notes?|report|invoice|contract|budget|presentation|thesis|slides?|draft|backup|archive|log)\b/i,
+    extract: (m, t) => ({
+      name:         normalizeSpokenFilename(extractName(t) || extractDeleteTarget(t)),
+      locationHint: extractLocation(t),
+    }),
+    needsConfirm: true,
   },
 
   // ── file.delete ──
@@ -250,25 +385,16 @@ const PATTERN_TABLE = [
     needsConfirm: true,
   },
 
-  // ── app.close — before app.open to prevent "close" being caught by open/read patterns ──
-  // Pattern is built dynamically from APP_NAMES so adding an app there updates this too.
-  {
-    intent:  'app.close',
-    pattern: new RegExp(`\\b(close|quit|exit|terminate|shut\\s+down)\\b.{0,40}\\b(${APP_NAMES_ALTS})\\b`, 'i'),
-    extract: (m, t) => ({ appName: extractTargetAppName(t) }),
-  },
-
-  // ── app.focus ──
-  {
-    intent:  'app.focus',
-    pattern: new RegExp(`\\b(focus|switch\\s+to|bring(?:\\s+up)?|show|foreground|go\\s+to)\\b.{0,40}\\b(${APP_NAMES_ALTS})\\b`, 'i'),
-    extract: (m, t) => ({ appName: extractTargetAppName(t) }),
-  },
+  // app.close, app.focus, app.open moved to before file.* patterns — see top of table
 
   // ── window.minimize ──
+  // M4.9 fix: skip when the phrase has a multi-clause modifier ("everything
+  // except", "all but", "all the", "every"). Those route to the agent (M4.5)
+  // which can iterate properly.
   {
     intent:  'window.minimize',
     pattern: /\b(minimize|minimise|hide\s+window)\b/i,
+    skipIf:  /\b(except|but\s+(?:not|for)|other\s+than|everything|every\s+window|all\s+(?:but|the|other))\b/i,
     extract: (m, t) => ({ appName: extractTargetAppName(t) || null }),
   },
 
@@ -276,6 +402,7 @@ const PATTERN_TABLE = [
   {
     intent:  'window.maximize',
     pattern: /\b(maximize|maximise|full.?screen|make\s+it\s+bigger|expand\s+window)\b/i,
+    skipIf:  /\b(except|but\s+(?:not|for)|other\s+than|all\s+(?:but|the|other))\b/i,
     extract: (m, t) => ({ appName: extractTargetAppName(t) || null }),
   },
 
@@ -310,17 +437,10 @@ const PATTERN_TABLE = [
     }),
   },
 
-  // ── app.open — pattern built from APP_NAMES_ALTS so new apps auto-register ──
-  {
-    intent:  'app.open',
-    pattern: new RegExp(`\\b(open|launch|start|run)\\b.{0,30}\\b(${APP_NAMES_ALTS})\\b`, 'i'),
-    extract: (m, t) => ({
-      appName: extractTargetAppName(t) || extractAppName(t),
-    }),
-  },
+  // app.open moved before file.* patterns — see top of table
 
   // ── file.open (with file extension) ──
-  // Must come AFTER app.open — app.open uses APP_NAMES_ALTS which won't match filenames.
+  // Placed after app.open — APP_NAMES_ALTS won't match filenames so no collision.
   // Must come AFTER file.read so "read notes.txt" hits file.read first.
   {
     intent:  'file.open',
@@ -339,6 +459,33 @@ const PATTERN_TABLE = [
       name:         extractDocumentAlias(t),
       locationHint: extractLocation(t),
     }),
+  },
+
+  // ── browser.tabs.list — M5.1 "list tabs / what tabs are open" ──
+  {
+    intent:  'browser.tabs.list',
+    pattern: /^\s*(?:what|which|show|list)\s+(?:are\s+)?(?:my\s+|the\s+)?tabs?\s+(?:are\s+)?(?:open)?\s*$|^\s*list\s+tabs?\s*$/i,
+    extract: () => ({}),
+  },
+
+  // ── browser.scroll — M5.1 "scroll up/down/to top/to bottom" ──
+  {
+    intent:  'browser.scroll',
+    pattern: /^\s*scroll\s+(up|down|to\s+the\s+top|to\s+top|to\s+the\s+bottom|to\s+bottom)\s*$/i,
+    extract: (m) => {
+      const dir = m[1].toLowerCase();
+      if (dir.includes('top'))    return { direction: 'top' };
+      if (dir.includes('bottom')) return { direction: 'bottom' };
+      if (dir === 'up')           return { direction: 'up' };
+      return { direction: 'down' };
+    },
+  },
+
+  // ── browser.read — M5.1 "read this page / read the page" ──
+  {
+    intent:  'browser.read',
+    pattern: /^\s*(?:read|summarize)\s+(?:this|the|that|current)\s+(?:page|article|tab)\s*$/i,
+    extract: () => ({ mode: 'main' }),
   },
 
   // ── browser.newtab — before browser.closetab; explicit "new tab" only ──
@@ -538,17 +685,20 @@ async function classify(transcript, llmFn) {
   for (let idx = 0; idx < COMPILED.length; idx++) {
     const rule  = COMPILED[idx];
     const match = lower.match(rule.regex) || t.match(rule.regex);
-    if (match) {
-      const params = rule.extract(match, t);
-      return {
-        intent:        rule.intent,
-        confidence:    'pattern',
-        params,
-        raw:           rawInput,
-        needsConfirm:  rule.needsConfirm === true || inferNeedsConfirm(rule.intent, params),
-        _patternIndex: idx,   // diagnostic — index in COMPILED (M4.4)
-      };
-    }
+    if (!match) continue;
+    // M4.9 fix: a rule may opt out of a match when a `skipIf` regex hits the
+    // same transcript. Used for window.minimize / .maximize so multi-clause
+    // phrases ("minimize everything except chrome") fall through to the agent.
+    if (rule.skipIf && rule.skipIf.test(t)) continue;
+    const params = rule.extract(match, t);
+    return {
+      intent:        rule.intent,
+      confidence:    'pattern',
+      params,
+      raw:           rawInput,
+      needsConfirm:  rule.needsConfirm === true || inferNeedsConfirm(rule.intent, params),
+      _patternIndex: idx,   // diagnostic — index in COMPILED (M4.4)
+    };
   }
 
   // ── Tier 2: LLM fallback (optional) ──
@@ -618,6 +768,17 @@ async function geminiLlmFallback(transcript, apiKey) {
 
 function unsupported(raw, reason) {
   return { intent: 'system.unsupported', confidence: 'pattern', params: {}, raw, needsConfirm: false, reason };
+}
+
+// M4.9 fix — strip wrapping quotes / trailing period commonly added by STT
+// dictation, so 'with "Hello dear".' fills "Hello dear" not '"Hello dear".'.
+function stripWrapPunct(s) {
+  if (!s) return s;
+  let out = s.trim();
+  out = out.replace(/[.,!?]+$/, '').trim();
+  // Remove matched wrapping quotes (single, double, smart variants).
+  out = out.replace(/^[‘’'"`“”](.*)[‘’'"`“”]$/s, '$1');
+  return out.trim();
 }
 
 function inferNeedsConfirm(intent, params) {
@@ -1157,4 +1318,4 @@ function extractBrowserHint(t) {
 
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
-module.exports = { classify, splitChain, splitChainWithBareAnd, extractBrowserHint, extractOrdinal };
+module.exports = { classify, splitChain, splitChainWithBareAnd, extractBrowserHint, extractOrdinal, inferNeedsConfirm };

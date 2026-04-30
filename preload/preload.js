@@ -213,6 +213,49 @@ contextBridge.exposeInMainWorld('jarvis', {
     return () => ipcRenderer.removeListener('jarvis:disambiguate', h);
   },
 
+  /** main → renderer: context badge update (M4.5). Returns unsubscribe fn. */
+  onContext: (fn) => {
+    const h = (_, p) => fn(p);
+    ipcRenderer.on('jarvis:context', h);
+    return () => ipcRenderer.removeListener('jarvis:context', h);
+  },
+
+  /** main → renderer: ack TTS audio (M4.7) — fires in parallel with dispatch. */
+  onAudioAck: (fn) => {
+    const h = (_, p) => fn(p);
+    ipcRenderer.on('jarvis:audio-ack', h);
+    return () => ipcRenderer.removeListener('jarvis:audio-ack', h);
+  },
+
+  /** main → renderer: narration TTS audio (M5.3) — per plan step. */
+  onAudioNarration: (fn) => {
+    const h = (_, p) => fn(p);
+    ipcRenderer.on('jarvis:audio-narration', h);
+    return () => ipcRenderer.removeListener('jarvis:audio-narration', h);
+  },
+
+  /** main → renderer: plan stream (M5.0) — { type: plan|step.start|step.done|step.fail|replan|final, ... } */
+  onPlan: (fn) => {
+    const h = (_, p) => fn(p);
+    ipcRenderer.on('jarvis:plan', h);
+    return () => ipcRenderer.removeListener('jarvis:plan', h);
+  },
+
+  /** main → renderer: result-panel cards (M5.4). */
+  onResults: (fn) => {
+    const h = (_, p) => fn(p);
+    ipcRenderer.on('jarvis:results', h);
+    return () => ipcRenderer.removeListener('jarvis:results', h);
+  },
+
+  /** Renderer → main: pick the Nth card from the active result panel. */
+  pickResult: (index) =>
+    ipcRenderer.send('jarvis:pick-result', index),
+
+  /** Renderer → main: voice-cancel keyword from a partial STT (M5.3). */
+  voiceCancel: (partial) =>
+    ipcRenderer.send('jarvis:voice-cancel', partial),
+
   /** Send confirm (true) or cancel (false) reply to main. */
   replyConfirm: (ok) =>
     ipcRenderer.send('jarvis:confirm-reply', ok),
@@ -234,4 +277,25 @@ contextBridge.exposeInMainWorld('jarvis', {
     ipcRenderer.on('jarvis:stop-recording', h);
     return () => ipcRenderer.removeListener('jarvis:stop-recording', h);
   },
+
+  /**
+   * main → renderer: HUD should subscribe to pipeline events and switch into
+   * the post-record visual state. Fired once audio has arrived in main from
+   * the PTT HUD. Returns unsubscribe fn.
+   */
+  onOpenForPipeline: (fn) => {
+    const h = () => fn();
+    ipcRenderer.on('jarvis:open-for-pipeline', h);
+    return () => ipcRenderer.removeListener('jarvis:open-for-pipeline', h);
+  },
+});
+
+// ── PTT HUD (push-to-talk waveform) ──────────────────────────────────────────
+// The PTT HUD owns the mic during a Right-Alt hold and pushes the resulting
+// audio through `window.jarvis.sendAudio` (already exposed above).
+
+contextBridge.exposeInMainWorld('ptt', {
+  onStart: (cb) => ipcRenderer.on('ptt:start', () => cb()),
+  onStop:  (cb) => ipcRenderer.on('ptt:stop',  () => cb()),
+  onCancel:(cb) => ipcRenderer.on('ptt:cancel',() => cb()),
 });

@@ -202,6 +202,114 @@ async function verify(classifierResult, toolResult) {
           detail:   intent === 'system.cancel' ? 'cancel handled' : 'selection handled',
         };
 
+      // ── M4.6: UIAutomation ops ──────────────────────────────────────────────
+      // ui.click — best-effort: trust ok flag + presence of target. A deeper
+      // re-query (focus moved, button now disabled) is possible but expensive
+      // and not always reliable on web pages. Phase 5 candidate.
+      case 'ui.click':
+        return {
+          verified: toolResult.ok === true && !!(data && data.target),
+          method:   'invoke_ok',
+          detail:   data && data.target
+            ? `invoked "${data.target.name}" (${data.method || 'invoke'})`
+            : 'click returned ok',
+        };
+
+      // ui.fill — re-read the element and confirm the new value matches.
+      // Falls back to "trust ok" when the read fails (e.g. non-readable input).
+      case 'ui.fill': {
+        if (!data || !data.target) {
+          return { verified: false, method: 'fill_readback', detail: 'no target in result' };
+        }
+        try {
+          const ui = require('./tools/ui');
+          const readBack = await ui.readElement({
+            name:         data.target.name,
+            automationId: data.target.automationId,
+          });
+          const expected = data.value != null ? String(data.value) : '';
+          const actual   = readBack.ok && readBack.data ? String(readBack.data.value || '') : '';
+          const match    = actual === expected;
+          return {
+            verified: match || readBack.ok === false,
+            method:   'fill_readback',
+            detail:   match
+              ? `field reads back as expected (${expected.length} chars)`
+              : (readBack.ok ? `mismatch — read "${actual.slice(0, 30)}"` : 'readback skipped'),
+          };
+        } catch (err) {
+          return { verified: true, method: 'fill_readback', detail: `readback error (skipped): ${err.message}` };
+        }
+      }
+
+      // ui.read — trivially verified when the tool returned a value.
+      case 'ui.read':
+        return {
+          verified: toolResult.ok === true && data && typeof data.value === 'string',
+          method:   'read_ok',
+          detail:   data && typeof data.value === 'string'
+            ? `read ${data.value.length} chars`
+            : 'no value returned',
+        };
+
+      // ui.list — array returned counts as verified.
+      case 'ui.list':
+        return {
+          verified: Array.isArray(data && data.elements),
+          method:   'list_ok',
+          detail:   `${(data && data.elements || []).length} elements`,
+        };
+
+      // ── M5.1 — Browser CDP tools ──────────────────────────────────────────
+      case 'browser.tabs.list':
+        return {
+          verified: !!(data && Array.isArray(data.tabs)),
+          method:   'cdp_list',
+          detail:   `${(data && data.tabs || []).length} tabs`,
+        };
+      case 'browser.tabs.open':
+      case 'browser.tabs.focus':
+      case 'browser.tabs.close':
+        return {
+          verified: toolResult.ok === true,
+          method:   'cdp_target',
+          detail:   data && data.tabId ? `tab=${data.tabId}` : 'cdp returned ok',
+        };
+      case 'browser.read':
+        return {
+          verified: !!(data && typeof data.content === 'string' && data.content.length > 0),
+          method:   'cdp_read',
+          detail:   data && data.content ? `${data.content.length} chars` : 'no content',
+        };
+      case 'browser.click':
+      case 'browser.fill':
+      case 'browser.scroll':
+        return {
+          verified: toolResult.ok === true,
+          method:   'cdp_action',
+          detail:   'cdp returned ok',
+        };
+
+      // ── M5.2 — Knowledge tools ────────────────────────────────────────────
+      case 'web.search':
+        return {
+          verified: !!(data && Array.isArray(data.results)),
+          method:   'search_results',
+          detail:   `${(data && data.results || []).length} results`,
+        };
+      case 'web.scrape':
+        return {
+          verified: !!(data && typeof data.text === 'string' && data.text.length > 0),
+          method:   'scrape_text',
+          detail:   data && data.text ? `${data.text.length} chars` : 'empty',
+        };
+      case 'vision.read':
+        return {
+          verified: !!(data && (data.summary || (Array.isArray(data.elements) && data.elements.length > 0))),
+          method:   'vision_summary',
+          detail:   data && data.summary ? data.summary.slice(0, 80) : 'no summary',
+        };
+
       default:
         return { verified: false, method: 'unknown_intent', detail: `No verifier for "${intent}"` };
     }

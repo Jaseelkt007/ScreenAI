@@ -3,19 +3,19 @@
 /**
  * index.js — Jarvis pipeline entry point.
  *
- * Hotkey behaviour (M3):
- *   First F9  → show HUD + send jarvis:start-recording (begin voice capture)
- *   Second F9 → send jarvis:stop-recording → HUD encodes audio → sends jarvis:audio
- *   F9 while pipeline running → ignored
- *   F9 while HUD idle/visible → hide HUD (toggle)
+ * Hotkey behaviour (push-to-talk):
+ *   Hold Right Alt          → show PTT HUD, start recording
+ *   Release Right Alt       → stop recording, hand audio to pipeline,
+ *                             show Jarvis HUD for transcript/plan/result
+ *   Release < 200 ms        → discard (anti-tap)
+ *   Hold while pipeline busy → ignored
  *
- * The Jarvis hotkey is registered via globalShortcut.register() directly —
- * NOT through hotkey.js — because hotkey.js calls globalShortcut.unregisterAll()
- * on every re-registration, which would wipe the Jarvis hotkey.
+ * Hold detection uses uiohook-napi because Electron's `globalShortcut`
+ * fires only on key down. The default key is Right Alt; the user can
+ * rebind via Settings → JARVIS HOTKEY.
  */
 
 const {
-  globalShortcut,
   BrowserWindow,
   ipcMain,
   screen,
@@ -31,15 +31,39 @@ const {
   clearPendingTypeTargetWindowHandle,
 } = require('./typing-target');
 
+// uiohook-napi is a native module — load defensively so a missing or
+// un-rebuilt binary degrades to "Jarvis disabled" rather than crashing
+// the whole app.
+let uIOhook = null;
+let UiohookKey = null;
+try {
+  ({ uIOhook, UiohookKey } = require('uiohook-napi'));
+} catch (err) {
+  console.warn('[Jarvis] uiohook-napi failed to load — push-to-talk disabled:', err.message);
+}
+
 // ─── Module state ─────────────────────────────────────────────────────────────
 
 let _hudWindow       = null;
-let _hudReady        = false;   // true once did-finish-load fires
-let _pendingStart    = false;   // queued start-recording for cold-start
+let _hudReady        = false;
+
+let _pttHudWindow    = null;
+let _pttHudReady     = false;
+let _pttPendingStart = false;
 
 let _pipelineRunning = false;
-let _isRecording     = false;   // M3: tracks whether HUD is currently recording
-let _hotkeyStarting  = false;   // guards the async "show HUD + begin recording" path
+let _pttHolding      = false;   // Right Alt currently down
+let _pttBusy         = false;   // released, audio in flight to main
+
+let _uiohookStarted  = false;
+let _activeKeycode   = null;    // current PTT keycode after settings resolve
+let _keydownHandler  = null;
+let _keyupHandler    = null;
+
+let _pttDownAt       = 0;
+let _pttBusyTimeout  = null;
+const PTT_MIN_HOLD_MS  = 200;
+const PTT_BUSY_TIMEOUT_MS = 3000; // safety: clear _pttBusy if audio never arrives
 
 // One-shot confirm resolve/reject
 let _confirmResolve = null;
@@ -48,100 +72,128 @@ let _confirmTimer   = null;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-function init(mainWindow) {
+function init() {
   if (!settings.getSetting('jarvisEnabled', true)) {
     console.log('[Jarvis] Disabled in settings — skipping init.');
     return;
   }
 
   createHudWindow();
-  registerHotkey();
+  createPttHudWindow();
   registerIpcHandlers();
+  registerHotkey();
 
-  console.log('[Jarvis] Initialized. F9 / Shift+Command+J → speak command.');
+  console.log('[Jarvis] Initialized. Hold Right Alt → speak command.');
 }
 
-// ─── Hotkey ───────────────────────────────────────────────────────────────────
+/** Re-read the configured PTT key and update the live binding. */
+function reregisterHotkey() {
+  _activeKeycode = resolveKeycode();
+  console.log(`[Jarvis] PTT key bound to keycode ${_activeKeycode}`);
+}
 
-const HOTKEYS = {
-  darwin: ['Shift+Command+J'],
-  win32:  ['F9'],
-  linux:  ['F9'],
-};
+// ─── Hotkey (uiohook push-to-talk) ────────────────────────────────────────────
+
+function resolveKeycode() {
+  if (!UiohookKey) return null;
+  const name = (settings.getSetting('jarvisHotkey', '') || 'AltRight').trim();
+  const code = UiohookKey[name];
+  if (typeof code === 'number') return code;
+  console.warn(`[Jarvis] Unknown jarvisHotkey "${name}" — falling back to AltRight`);
+  return UiohookKey.AltRight;
+}
 
 function registerHotkey() {
-  const customHotkey = settings.getSetting('jarvisHotkey', '');
-  const shortcuts = customHotkey
-    ? [customHotkey]
-    : (HOTKEYS[process.platform] || HOTKEYS.linux);
+  if (!uIOhook || !UiohookKey) return;
 
-  for (const shortcut of shortcuts) {
+  _activeKeycode = resolveKeycode();
+
+  _keydownHandler = (e) => {
+    if (_activeKeycode == null || e.keycode !== _activeKeycode) return;
+    onPttKeyDown();
+  };
+  _keyupHandler = (e) => {
+    if (_activeKeycode == null || e.keycode !== _activeKeycode) return;
+    onPttKeyUp();
+  };
+
+  uIOhook.on('keydown', _keydownHandler);
+  uIOhook.on('keyup',   _keyupHandler);
+
+  if (!_uiohookStarted) {
     try {
-      const ok = globalShortcut.register(shortcut, onHotkeyFired);
-      if (ok) {
-        console.log(`[Jarvis] Hotkey registered: ${shortcut}`);
-        return;
-      }
-      console.warn(`[Jarvis] Could not register hotkey: ${shortcut}`);
+      uIOhook.start();
+      _uiohookStarted = true;
+      console.log(`[Jarvis] uiohook started — PTT keycode ${_activeKeycode}`);
     } catch (err) {
-      console.warn(`[Jarvis] Hotkey error (${shortcut}):`, err.message);
+      console.error('[Jarvis] uiohook.start failed:', err.message);
     }
   }
 }
 
-function onHotkeyFired() {
-  // ── While pipeline is executing: ignore ──────────────────────────────────
-  if (_pipelineRunning) return;
-
-  // ── While first-press startup is still restoring state: ignore ───────────
-  if (_hotkeyStarting) return;
-
-  // ── While recording: second press = stop recording ───────────────────────
-  if (_isRecording) {
-    _isRecording = false;
-    hudSend('jarvis:stop-recording', {});
+function onPttKeyDown() {
+  // OS key-repeat fires keydown continuously while held — ignore re-entrant
+  // events while we're already holding.
+  if (_pttHolding) return;
+  if (_pipelineRunning || _pttBusy) {
+    // Don't even flip the holding flag, so the matching keyup is a no-op too.
     return;
   }
 
-  // ── HUD is visible and idle: hide (toggle off) ───────────────────────────
-  if (_hudWindow && !_hudWindow.isDestroyed() && _hudWindow.isVisible()) {
-    hideHud();
-    return;
-  }
-
-  // ── First press: show HUD + start recording ───────────────────────────────
-  void startRecordingFromHotkey();
+  _pttHolding = true;
+  _pttDownAt  = Date.now();
+  void onPttStart();
 }
 
-async function startRecordingFromHotkey() {
-  _hotkeyStarting = true;
-  _isRecording = true;
+function onPttKeyUp() {
+  if (!_pttHolding) return;
+  _pttHolding = false;
 
+  const heldMs = Date.now() - _pttDownAt;
+  if (heldMs < PTT_MIN_HOLD_MS) {
+    void onPttCancel();
+    return;
+  }
+
+  _pttBusy = true;
+  if (_pttBusyTimeout) clearTimeout(_pttBusyTimeout);
+  _pttBusyTimeout = setTimeout(() => {
+    if (_pttBusy) {
+      console.warn('[Jarvis] PTT audio never arrived — clearing busy flag');
+      _pttBusy = false;
+    }
+    _pttBusyTimeout = null;
+  }, PTT_BUSY_TIMEOUT_MS);
+  pttHudSend('ptt:stop');
+}
+
+async function onPttStart() {
   try {
     await rememberTypeTargetWindow();
+  } catch (err) {
+    console.warn('[Jarvis] type-target capture failed (non-fatal):', err.message);
+  }
 
-    if (!_hudWindow || _hudWindow.isDestroyed()) {
-      createHudWindow();
-    }
+  if (!_pttHudWindow || _pttHudWindow.isDestroyed()) {
+    createPttHudWindow();
+  }
 
-    showHud();
-
-    if (_hudReady) {
-      hudSend('jarvis:start-recording', {});
-    } else {
-      // Window not yet loaded — send after did-finish-load
-      _pendingStart = true;
-    }
-  } finally {
-    _hotkeyStarting = false;
+  if (_pttHudReady) {
+    pttHudSend('ptt:start');
+  } else {
+    _pttPendingStart = true;
   }
 }
 
-// ─── HUD window ───────────────────────────────────────────────────────────────
+function onPttCancel() {
+  if (_pttHudReady) pttHudSend('ptt:cancel');
+  _pttPendingStart = false;
+}
+
+// ─── Jarvis HUD (results / plan / transcript) ────────────────────────────────
 
 function createHudWindow() {
-  _hudReady     = false;
-  _pendingStart = false;
+  _hudReady = false;
 
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
@@ -152,10 +204,14 @@ function createHudWindow() {
     y:           height - 120 - 20,
     frame:       false,
     transparent: true,
+    backgroundColor: '#00000000',
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable:   false,
     movable:     true,
+    hasShadow:   false,
+    thickFrame:  false,
+    roundedCorners: false,
     show:        false,
     webPreferences: {
       contextIsolation: true,
@@ -164,6 +220,11 @@ function createHudWindow() {
       preload:          path.join(__dirname, '../../preload/preload.js'),
     },
   });
+
+  // Re-assert transparency. On Windows 11 the constructor `backgroundColor`
+  // is sometimes ignored, leaving the window painting an opaque black plate
+  // behind any rounded body — visible as a "rectangle around the oval".
+  try { _hudWindow.setBackgroundColor('#00000000'); } catch {}
 
   _hudWindow.webContents.on('will-navigate', (e, url) => {
     if (!url.startsWith('file://')) e.preventDefault();
@@ -176,18 +237,12 @@ function createHudWindow() {
 
   _hudWindow.webContents.once('did-finish-load', () => {
     _hudReady = true;
-    if (_pendingStart) {
-      _pendingStart = false;
-      hudSend('jarvis:start-recording', {});
-    }
+    try { _hudWindow.setBackgroundColor('#00000000'); } catch {}
   });
 
   _hudWindow.on('closed', () => {
-    _hudWindow    = null;
-    _hudReady     = false;
-    _isRecording  = false;
-    _pendingStart = false;
-    _hotkeyStarting = false;
+    _hudWindow = null;
+    _hudReady  = false;
     clearPendingTypeTargetWindowHandle();
   });
 
@@ -221,15 +276,99 @@ function hudSend(channel, payload) {
   _hudWindow.webContents.send(channel, payload);
 }
 
+// ─── PTT HUD (small waveform, owns the mic during hold) ──────────────────────
+
+function createPttHudWindow() {
+  _pttHudReady     = false;
+  _pttPendingStart = false;
+
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  const W = 140;
+  const H = 44;
+
+  _pttHudWindow = new BrowserWindow({
+    width:       W,
+    height:      H,
+    x:           Math.round((width - W) / 2),
+    y:           height - H - 32,
+    frame:       false,
+    transparent: true,
+    backgroundColor: '#00000000', // fully transparent — prevents OS-level rectangle backdrop
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable:   false,
+    movable:     false,
+    focusable:   false,
+    hasShadow:   false,
+    thickFrame:  false,
+    roundedCorners: false,
+    show:        false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration:  false,
+      sandbox:          false,
+      preload:          path.join(__dirname, '../../preload/preload.js'),
+    },
+  });
+
+  _pttHudWindow.setAlwaysOnTop(true, 'screen-saver');
+  try { _pttHudWindow.setBackgroundColor('#00000000'); } catch {}
+
+  _pttHudWindow.webContents.on('will-navigate', (e, url) => {
+    if (!url.startsWith('file://')) e.preventDefault();
+  });
+  _pttHudWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  _pttHudWindow.loadFile(
+    path.join(__dirname, '../../renderer/ptt-hud/ptt-hud.html')
+  );
+
+  _pttHudWindow.webContents.once('did-finish-load', () => {
+    _pttHudReady = true;
+    try { _pttHudWindow.setBackgroundColor('#00000000'); } catch {}
+    if (_pttPendingStart) {
+      _pttPendingStart = false;
+      pttHudSend('ptt:start');
+      // The renderer paints the pill; the show happens here.
+      try { _pttHudWindow.showInactive(); } catch { _pttHudWindow.show(); }
+    }
+  });
+
+  _pttHudWindow.on('closed', () => {
+    _pttHudWindow = null;
+    _pttHudReady  = false;
+  });
+
+  if (process.platform === 'darwin') {
+    _pttHudWindow.setVisibleOnAllWorkspaces(true);
+  }
+}
+
+function pttHudSend(channel, payload) {
+  if (!_pttHudWindow || _pttHudWindow.isDestroyed()) return;
+  if (_pttHudWindow.webContents.isDestroyed()) return;
+  if (channel === 'ptt:start') {
+    try { _pttHudWindow.showInactive(); } catch { _pttHudWindow.show(); }
+  }
+  _pttHudWindow.webContents.send(channel, payload);
+  if (channel === 'ptt:stop' || channel === 'ptt:cancel') {
+    // Renderer fades out, then we hide the OS window so Windows drops the
+    // always-on-top surface entirely.
+    setTimeout(() => {
+      if (_pttHudWindow && !_pttHudWindow.isDestroyed() && _pttHudWindow.isVisible()) {
+        _pttHudWindow.hide();
+      }
+    }, 180);
+  }
+}
+
+// ─── Type-target capture ─────────────────────────────────────────────────────
+
 async function rememberTypeTargetWindow() {
   clearPendingTypeTargetWindowHandle();
-
   if (process.platform !== 'win32') return;
-
   const hwnd = await captureForegroundWindow();
-  if (hwnd) {
-    setPendingTypeTargetWindowHandle(hwnd);
-  }
+  if (hwnd) setPendingTypeTargetWindowHandle(hwnd);
 }
 
 // ─── waitForConfirm — one-shot promise ───────────────────────────────────────
@@ -256,16 +395,21 @@ function clearConfirmState() {
 
 function registerIpcHandlers() {
 
-  // ── jarvis:audio — M3 voice audio (HUD sends after MediaRecorder stops) ──
+  // ── jarvis:audio — audio arrives from the PTT HUD ────────────────────────
   ipcMain.on('jarvis:audio', async (_e, { audioBase64, mimeType }) => {
-    // Recording is now complete regardless of who stopped it
-    _isRecording = false;
+    _pttBusy = false;
+    if (_pttBusyTimeout) { clearTimeout(_pttBusyTimeout); _pttBusyTimeout = null; }
 
     if (_pipelineRunning) {
       console.warn('[Jarvis] Pipeline already running — ignoring audio');
       return;
     }
     if (!audioBase64) return;
+
+    // Surface the Jarvis HUD now that work is starting. The HUD subscribes
+    // to pipeline events as soon as it gets `jarvis:open-for-pipeline`.
+    showHud();
+    hudSend('jarvis:open-for-pipeline');
 
     _pipelineRunning = true;
     try {
@@ -276,11 +420,10 @@ function registerIpcHandlers() {
       clearPendingTypeTargetWindowHandle();
     }
 
-    // Auto-hide after result auto-dismiss in renderer (3–5s); add small buffer
     setTimeout(() => { if (!_pipelineRunning) hideHud(); }, 4500);
   });
 
-  // ── jarvis:text — M2/debug typed command ─────────────────────────────────
+  // ── jarvis:text — typed command (debug fallback) ─────────────────────────
   ipcMain.on('jarvis:text', async (_e, text) => {
     if (_pipelineRunning) {
       console.warn('[Jarvis] Pipeline already running — ignoring text command');
@@ -289,6 +432,9 @@ function registerIpcHandlers() {
     if (!text || typeof text !== 'string' || !text.trim()) return;
 
     console.log(`[Jarvis] Text command: "${text}"`);
+    showHud();
+    hudSend('jarvis:open-for-pipeline');
+
     _pipelineRunning = true;
     try {
       await runPipelineFromText(text.trim(), hudSend, waitForConfirm);
@@ -300,7 +446,6 @@ function registerIpcHandlers() {
     setTimeout(() => { if (!_pipelineRunning) hideHud(); }, 4500);
   });
 
-  // ── jarvis:confirm-reply ──────────────────────────────────────────────────
   ipcMain.on('jarvis:confirm-reply', (_e, confirmed) => {
     if (_confirmResolve) {
       const resolve = _confirmResolve;
@@ -309,23 +454,47 @@ function registerIpcHandlers() {
     }
   });
 
-  // ── jarvis:close ──────────────────────────────────────────────────────────
   ipcMain.on('jarvis:close', () => {
-    _isRecording = false;
     hideHud();
   });
 
-  // ── jarvis:ping ───────────────────────────────────────────────────────────
+  // ── M5.4 — jarvis:pick-result — voice-pickable card from result panel ────
+  ipcMain.on('jarvis:pick-result', async (_e, index) => {
+    if (_pipelineRunning) return;
+    const ord = Number(index);
+    if (!ord || ord < 1 || ord > 9) return;
+    showHud();
+    hudSend('jarvis:open-for-pipeline');
+    _pipelineRunning = true;
+    try {
+      await runPipelineFromText(`number ${ord}`, hudSend, waitForConfirm);
+    } finally {
+      _pipelineRunning = false;
+    }
+  });
+
+  // ── M5.3 — jarvis:voice-cancel — partial-STT keyword cancel ──────────────
+  ipcMain.on('jarvis:voice-cancel', (_e, partial) => {
+    try {
+      const { maybeVoiceCancel } = require('./pipeline');
+      maybeVoiceCancel(typeof partial === 'string' ? partial : '');
+    } catch (err) {
+      console.warn('[Jarvis] voice-cancel error:', err.message);
+    }
+  });
+
   ipcMain.handle('jarvis:ping', () => ({
-    ok: true, version: 1, running: _pipelineRunning, recording: _isRecording,
+    ok: true, version: 1, running: _pipelineRunning, holding: _pttHolding,
   }));
 }
 
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
 app.on('will-quit', () => {
-  try { globalShortcut.unregister('F9'); } catch {}
-  try { globalShortcut.unregister('Shift+Command+J'); } catch {}
+  if (uIOhook && _uiohookStarted) {
+    try { uIOhook.stop(); } catch {}
+    _uiohookStarted = false;
+  }
 });
 
-module.exports = { init };
+module.exports = { init, reregisterHotkey };

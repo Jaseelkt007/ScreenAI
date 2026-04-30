@@ -22,9 +22,103 @@ const classifierMod = require('./classifier');
 const dispatcherMod = require('./dispatcher');
 const verifierMod   = require('./verifier');
 const context       = require('./context');
+const agentMod      = require('./agent');
+const ackMod        = require('./ack');
+// M5.0 — multi-step planner/executor for classifier-misses
+const executorMod   = require('./executor');
 
 // stt/tts are required lazily so pipeline.js stays importable in Tier A tests
 // without Electron. In M3, stt will be called from runPipelineFromAudio.
+
+// ─── M4.7: Streaming pipeline state ──────────────────────────────────────────
+
+// Cache of pre-classified partials. STT does not yet stream natively, but the
+// HUD can call prewarmClassify() with an in-progress transcript to get a head
+// start. Cleared on every successful run consumption or after 5s.
+let _prewarm = null;   // { transcript, result, at } | null
+
+// Current run controller, so the hotkey/HUD can fire cancelCurrent().
+let _currentController = null;
+
+function _consumePrewarm(transcript) {
+  if (!_prewarm) return null;
+  const stale = Date.now() - _prewarm.at > 5000;
+  const sameInput = _prewarm.transcript === transcript;
+  if (stale || !sameInput) { _prewarm = null; return null; }
+  const out = _prewarm.result;
+  _prewarm = null;
+  return out;
+}
+
+/**
+ * M4.7 — Pre-classify a partial transcript so the next runPipelineFromText with
+ * the same transcript can skip the classifier call. Safe to call repeatedly;
+ * destructive intents are NEVER cached (we can't speculate on them safely).
+ *
+ * @param {string} partialTranscript
+ * @returns {Promise<{ cached: boolean, intent?: string, reason?: string }>}
+ */
+async function prewarmClassify(partialTranscript) {
+  if (!partialTranscript || typeof partialTranscript !== 'string') {
+    return { cached: false, reason: 'empty' };
+  }
+  const settings = require('../settings');
+  if (!settings.getSetting('jarvisStreamingEnabled', true)) {
+    return { cached: false, reason: 'streaming disabled' };
+  }
+  try {
+    const result = await classifierMod.classify(partialTranscript);
+    // Only cache solid pattern matches that are non-destructive.
+    if (result.confidence !== 'pattern') {
+      return { cached: false, reason: `confidence ${result.confidence}` };
+    }
+    if (result.needsConfirm) {
+      return { cached: false, intent: result.intent, reason: 'destructive' };
+    }
+    _prewarm = { transcript: partialTranscript, result, at: Date.now() };
+    return { cached: true, intent: result.intent };
+  } catch (err) {
+    return { cached: false, reason: err.message };
+  }
+}
+
+/**
+ * M4.7 — Abort the currently-running pipeline (if any). The in-flight tool
+ * will complete, but the pipeline will skip TTS/verify and emit a cancelled
+ * jarvis:done. Safe to call when no pipeline is running.
+ *
+ * M5.3 extends this to handle plan-level cancellation: when a multi-step plan
+ * is in flight, abort() stops the executor between steps.
+ */
+function cancelCurrent() {
+  if (_currentController && !_currentController.signal.aborted) {
+    try { _currentController.abort(); } catch { /* ignore */ }
+    return true;
+  }
+  return false;
+}
+
+// ─── M5.3: Voice-cancel keyword scanner ──────────────────────────────────────
+
+const _CANCEL_KEYWORDS = /\b(stop|cancel|wait|never\s*mind|nevermind|abort)\b/i;
+
+/**
+ * Called by the HUD with a partial-STT transcript while a plan is running.
+ * If the transcript matches a cancel keyword and voice-cancel is enabled, the
+ * current pipeline is aborted (same effect as F9). Returns true on cancel.
+ *
+ * @param {string} partialTranscript
+ * @returns {boolean}
+ */
+function maybeVoiceCancel(partialTranscript) {
+  if (!partialTranscript || typeof partialTranscript !== 'string') return false;
+  const settings = require('../settings');
+  if (!settings.getSetting('jarvisVoiceCancelEnabled', true)) return false;
+  if (!_currentController || _currentController.signal.aborted) return false;
+  if (!_CANCEL_KEYWORDS.test(partialTranscript)) return false;
+  console.log(`[JARVIS] Voice cancel triggered by partial: "${partialTranscript.slice(0, 60)}"`);
+  return cancelCurrent();
+}
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
@@ -105,20 +199,37 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0, chainStep) {
     dispatch: 'skipped',
     verify:   'skipped',
     chainStep: chainStep || null,
+    // M4.4.1 — routing path. M4.5 will set 'agent' when the agent layer routes.
+    path:     'pattern',
     error:    null,
   };
   let _classifierResult = null;
   let _toolResult       = null;
   let _verifierResult   = null;
+  let _ackPromise       = null;   // M4.7 — non-blocking ack TTS
+
+  // M4.7 — per-run AbortController. Stored module-level so cancelCurrent() can
+  // fire it, and reset in the finally block.
+  const controller = new AbortController();
+  const _prevController = _currentController;
+  _currentController = controller;
 
   try {
 
-  // ── 1. Classify ─────────────────────────────────────────────────────────────
+  // ── 1. Classify (or consume pre-warm) ──────────────────────────────────────
   hudSend('jarvis:status', { phase: 'classifying', transcript });
   const t1 = Date.now();
-  const classifierResult = await classifierMod.classify(transcript);
+  let classifierResult = _consumePrewarm(transcript);
+  if (classifierResult) {
+    // Speculative cache hit — flag for trace.
+    classifierResult._speculative = true;
+    run.speculative = true;
+    logTiming('Classify', 0, `pattern (pre-warm)`);
+  } else {
+    classifierResult = await classifierMod.classify(transcript);
+    logTiming('Classify', Date.now() - t1, classifierResult.confidence);
+  }
   timings.classify = Date.now() - t1;
-  logTiming('Classify', timings.classify, classifierResult.confidence);
   _classifierResult = classifierResult;
 
   // Capture context state immediately after classify (M4.4)
@@ -130,10 +241,183 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0, chainStep) {
   run.ttl     = _computeTtlRemaining(_snap);
   run.ctxSnap = _snap;
 
-  // ── 2. Unsupported fast-exit ─────────────────────────────────────────────────
+  // ── 2. Unsupported → M5.0 planner (or M4.5 agent fallback / fast-exit) ─────
   if (classifierResult.intent === 'system.unsupported') {
-    const msg = classifierResult.reason || "I don't know how to do that yet.";
-    await speakAndDone(hudSend, false, msg, msg, timings, t0);
+    const settingsMod    = require('../settings');
+    const plannerEnabled = settingsMod.getSetting('jarvisPlannerEnabled', true);
+    const agentEnabled   = settingsMod.getSetting('jarvisAgentEnabled', true);
+    const apiKey         = settingsMod.getApiKey();
+
+    if ((!plannerEnabled && !agentEnabled) || !apiKey) {
+      const msg = classifierResult.reason || "I don't know how to do that yet.";
+      await speakAndDone(hudSend, false, msg, msg, timings, t0);
+      return;
+    }
+
+    // ── 2a. Planner path (M5.0) ───────────────────────────────────────────
+    if (plannerEnabled) {
+      hudSend('jarvis:status', { phase: 'thinking', transcript });
+      const tPlan = Date.now();
+      const planResult = await executorMod.runPlan({
+        transcript,
+        hudSend,
+        waitForConfirm,
+        signal: controller.signal,
+      });
+      timings.dispatch = Date.now() - tPlan;
+      run.path        = 'plan';
+      run.plan        = planResult.plan || null;
+      run.planSteps   = planResult.planSteps || [];
+      run.replans     = planResult.replans || 0;
+      run.intent      = (planResult.lastClassifier && planResult.lastClassifier.intent) || 'plan.fallback';
+      run.conf        = 'plan';
+      run.dispatch    = planResult.ok ? 'ok' : (planResult.stopped === 'cancelled' ? 'cancelled' : 'error');
+      _classifierResult = planResult.lastClassifier || classifierResult;
+      _toolResult       = planResult.lastDispatch;
+
+      // Best-effort verify of the last step (covers trace + lastAction recording).
+      if (planResult.lastDispatch && planResult.lastClassifier) {
+        try {
+          _verifierResult = await verifierMod.verify(planResult.lastClassifier, planResult.lastDispatch);
+          run.verify = _verifierResult.verified ? 'ok' : 'unverified';
+        } catch { /* non-fatal */ }
+      }
+
+      _maybeEmitContextEvent(hudSend);
+
+      // Emit any final results into the result panel (M5.4) before TTS.
+      _maybeEmitResultsFromPlan(hudSend, planResult);
+
+      // Record the last action so "do that again" / "undo" still works through the plan path.
+      if (_classifierResult && _toolResult && _toolResult.ok) {
+        _recordLastAction(_classifierResult, _toolResult, transcript);
+      }
+
+      hudSend('jarvis:status', { phase: 'speaking', transcript });
+      const tTtsPlan = Date.now();
+      let audioPlan = null, mimePlan = null;
+      try {
+        const { synthesizeSpeech } = require('../tts');
+        const ttsRes = await synthesizeSpeech(planResult.finalSpeak || (planResult.ok ? 'Done.' : 'Sorry.'));
+        audioPlan = ttsRes.audioBuffer.toString('base64');
+        mimePlan  = ttsRes.mimeType;
+      } catch (err) {
+        console.warn(`[Jarvis] Plan TTS failed (non-fatal): ${err.message}`);
+      }
+      timings.tts   = Date.now() - tTtsPlan;
+      timings.total = Date.now() - t0;
+      logTiming('Total', timings.total);
+
+      hudSend('jarvis:done', {
+        ok:          planResult.ok,
+        display:     planResult.finalDisplay || planResult.finalSpeak,
+        audioBase64: audioPlan,
+        mimeType:    mimePlan,
+        path:        'plan',
+        stopped:     planResult.stopped,
+      });
+      return;
+    }
+    // ── 2b. Fall through to legacy M4.5 agent path ────────────────────────
+
+    // Agent route. The agent dispatches via the existing dispatcher (so all
+    // confirmation gates apply). It returns finalText + the captured steps.
+    hudSend('jarvis:status', { phase: 'thinking', transcript });
+    const tAgent = Date.now();
+    const agentResult = await agentMod.runAgent({
+      transcript,
+      hudSend,
+      waitForConfirm,
+      signal: controller.signal,   // M4.8 audit fix — let cancelCurrent() abort the agent
+    });
+    timings.dispatch = Date.now() - tAgent;
+    run.path        = 'agent';
+    run.agentSteps  = agentResult.agentSteps || [];
+    run.intent      = (agentResult.lastClassifierResult && agentResult.lastClassifierResult.intent) || 'agent.fallback';
+    run.conf        = 'agent';
+    run.dispatch    = agentResult.ok ? 'ok' : 'error';
+    if (!agentResult.ok && agentResult.error) run.error = agentResult.error;
+    _classifierResult = agentResult.lastClassifierResult || classifierResult;
+    _toolResult       = agentResult.lastDispatchResult;
+
+    // Verify the LAST dispatched tool result (when present) so the trace is
+    // complete and the spoken text reflects verification status.
+    if (agentResult.lastDispatchResult && agentResult.lastClassifierResult) {
+      try {
+        const tVerify = Date.now();
+        _verifierResult = await verifierMod.verify(
+          agentResult.lastClassifierResult, agentResult.lastDispatchResult,
+        );
+        timings.verify = Date.now() - tVerify;
+        run.verify = _verifierResult.verified ? 'ok' : 'unverified';
+      } catch { /* non-fatal */ }
+    }
+
+    // ── M4.8 — Verify-fail retry ──────────────────────────────────────────
+    // If the agent dispatched OK but verifier explicitly says the action
+    // didn't take effect, give the agent one more shot. Cap is 1 retry.
+    if (
+      agentResult.ok &&
+      agentResult.lastDispatchResult && agentResult.lastDispatchResult.ok &&
+      _verifierResult && _verifierResult.verified === false
+    ) {
+      hudSend('jarvis:status', { phase: 'thinking', transcript, retry: true });
+      const retryResult = await agentMod.retryAgent({
+        originalTranscript:    transcript,
+        lastClassifierResult:  agentResult.lastClassifierResult,
+        lastDispatchResult:    agentResult.lastDispatchResult,
+        verifierResult:        _verifierResult,
+        hudSend, waitForConfirm,
+      });
+      run.agentSteps = [...(run.agentSteps || []), ...(retryResult.agentSteps || [])];
+      if (retryResult.lastDispatchResult && retryResult.lastClassifierResult) {
+        _toolResult       = retryResult.lastDispatchResult;
+        _classifierResult = retryResult.lastClassifierResult;
+        try {
+          _verifierResult = await verifierMod.verify(_classifierResult, _toolResult);
+          run.verify = _verifierResult.verified ? 'ok' : 'unverified';
+        } catch { /* non-fatal */ }
+        run.intent   = retryResult.lastClassifierResult.intent || run.intent;
+        run.dispatch = retryResult.ok ? 'ok' : 'error';
+      }
+      // The retry's spoken text supersedes the original failed-verify message.
+      if (retryResult.finalText) agentResult.finalText = retryResult.finalText;
+      agentResult.ok      = retryResult.ok || agentResult.ok;
+      agentResult.stopped = `${agentResult.stopped}+retry-${retryResult.stopped}`;
+    }
+
+    _maybeEmitContextEvent(hudSend);
+
+    // M4.8 — record the agent's final action so "do that again" works
+    // through the agent path too.
+    if (_classifierResult && _toolResult) {
+      _recordLastAction(_classifierResult, _toolResult, transcript);
+    }
+
+    // Synthesize TTS for the agent's spoken finalText (works for ok and error).
+    hudSend('jarvis:status', { phase: 'speaking', transcript });
+    const tTtsAgent = Date.now();
+    let audioB64Agent = null, mimeAgent = null;
+    try {
+      const { synthesizeSpeech } = require('../tts');
+      const ttsRes = await synthesizeSpeech(agentResult.finalText || (agentResult.ok ? 'Done.' : 'Sorry.'));
+      audioB64Agent = ttsRes.audioBuffer.toString('base64');
+      mimeAgent     = ttsRes.mimeType;
+    } catch (err) {
+      console.warn(`[Jarvis] TTS failed (non-fatal): ${err.message}`);
+    }
+    timings.tts   = Date.now() - tTtsAgent;
+    timings.total = Date.now() - t0;
+    logTiming('Total', timings.total);
+
+    hudSend('jarvis:done', {
+      ok:          agentResult.ok,
+      display:     agentResult.finalText,
+      audioBase64: audioB64Agent,
+      mimeType:    mimeAgent,
+      path:        'agent',
+      stopped:     agentResult.stopped,
+    });
     return;
   }
 
@@ -172,12 +456,33 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0, chainStep) {
   // Only injects when no chain context is already set on the result.
   _injectStandaloneContext(classifierResult);
 
+  // ── 3c. M4.7 ack TTS — disabled ─────────────────────────────────────────────
+  // The ack ("Opening notepad…") immediately followed by the result
+  // ("Opened notepad.") was redundant. The result-tier TTS after verify is the
+  // only spoken response now. Setting plumbing left in place; flip
+  // jarvisAckTtsEnabled in settings.js and the saved settings.json to revive.
+  {
+    const settingsMod = require('../settings');
+    const ackEnabled  =
+      settingsMod.getSetting('jarvisStreamingEnabled', true) &&
+      settingsMod.getSetting('jarvisAckTtsEnabled', false);
+    if (ackEnabled) {
+      const phrase = ackMod.ackPhraseFor(classifierResult.intent, classifierResult.params, {
+        needsConfirm: false,
+      });
+      if (phrase) {
+        run.ackPhrase = phrase;
+        _ackPromise   = ackMod.fireAck(phrase, hudSend);
+      }
+    }
+  }
+
   // ── 4. Dispatch ──────────────────────────────────────────────────────────────
   hudSend('jarvis:status', { phase: 'executing', intent: classifierResult.intent, transcript });
   const t2 = Date.now();
   let toolResult;
   try {
-    toolResult = await dispatcherMod.dispatch(classifierResult);
+    toolResult = await dispatcherMod.dispatch(classifierResult, { signal: controller.signal });
   } catch (err) {
     // DispatchError — param validation failure
     run.dispatch = 'error';
@@ -188,6 +493,14 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0, chainStep) {
   timings.dispatch = Date.now() - t2;
   logTiming('Dispatch', timings.dispatch);
   _toolResult = toolResult;
+
+  // ── 4a. M4.7 — handle cancellation ─────────────────────────────────────────
+  if (controller.signal.aborted || toolResult.cancelled) {
+    run.dispatch = 'cancelled';
+    run.error    = 'cancelled';
+    hudSend('jarvis:done', { ok: false, display: 'Cancelled.', stopped: 'cancelled' });
+    return;
+  }
 
   // ── 4b. Disambiguation: file op found multiple candidates ─────────────────
   if (!toolResult.ok && toolResult.ambiguous) {
@@ -276,6 +589,12 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0, chainStep) {
     timings.total = Date.now() - t0;
     logTiming('Total', timings.total);
 
+    // Emit context badge after resolved dispatch
+    _maybeEmitContextEvent(hudSend);
+
+    // M4.8 — record the resolved action so "do that again" / "undo" can target it.
+    _recordLastAction(resolved, resolvedResult, transcript);
+
     hudSend('jarvis:done', {
       ok: true,
       display: resolvedDisplay,
@@ -322,7 +641,16 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0, chainStep) {
   timings.total = Date.now() - t0;
   logTiming('Total', timings.total);
 
-  // ── 8. Done ──────────────────────────────────────────────────────────────────
+  // ── 8. Emit context badge event if context changed ───────────────────────────
+  _maybeEmitContextEvent(hudSend);
+
+  // ── 8a. M5.4 — emit result-panel cards for result-bearing tools ────────────
+  _maybeEmitResultsFromDispatch(hudSend, classifierResult, toolResult);
+
+  // ── 8b. M4.8 — record the action for later repeat/undo ─────────────────────
+  _recordLastAction(classifierResult, toolResult, transcript);
+
+  // ── 9. Done ──────────────────────────────────────────────────────────────────
   hudSend('jarvis:done', {
     ok: true,
     display,
@@ -339,6 +667,10 @@ async function _runSingle(transcript, hudSend, waitForConfirm, t0, chainStep) {
     _emitStructuredRunLog(run, totalMs);
     _maybeWriteTrace(run, _classifierResult, _toolResult, _verifierResult, timings, hudSend)
       .catch(() => {});
+    // ── M4.7: drain the ack TTS so its log line lands after our run log ──
+    if (_ackPromise) { try { await _ackPromise; } catch { /* ignore */ } }
+    // Restore previous controller (handles nested chain calls)
+    if (_currentController === controller) _currentController = _prevController;
   }
 }
 
@@ -381,6 +713,8 @@ async function _runChained(parts, wasCapped, hudSend, waitForConfirm, t0) {
       dispatch: 'skipped',
       verify:   'skipped',
       chainStep: stepLabel,
+      // M4.4.1 — chain steps are pattern-routed today; M4.5 may override per-step.
+      path:     'pattern',
     };
 
     if (classified.intent === 'system.unsupported') {
@@ -461,6 +795,10 @@ async function _runChained(parts, wasCapped, hudSend, waitForConfirm, t0) {
     _emitStructuredRunLog(stepRun, Date.now() - stepT0);
     const actionStr    = buildDisplay(toolResult, verifyResult);
     actions.push(actionStr);
+
+    // M4.8 — chain steps each count as actions worth repeating/undoing.
+    // The latest one wins; "do that again" repeats just step 2.
+    _recordLastAction(classified, toolResult, part);
 
     // ── Build chain context after step 1 success ──────────────────────────────
     if (i === 0) {
@@ -590,10 +928,14 @@ function _computeTtlRemaining(snap) {
 }
 
 function _emitStructuredRunLog(run, totalMs) {
-  const pStr = run.p != null ? run.p : '-';
+  const pStr     = run.p != null ? run.p : '-';
+  const pathStr  = run.path || 'pattern';
+  const specStr  = run.speculative ? ' speculative=1' : '';
+  const ackStr   = run.ackPhrase ? ` ack="${run.ackPhrase}"` : '';
   console.log(
     `[JARVIS RUN] id=${run.id} intent=${run.intent} conf=${run.conf} p=${pStr}` +
-    ` ctx=${run.ctx} ttl=${run.ttl}ms dispatch=${run.dispatch} verify=${run.verify} total=${totalMs}ms`
+    ` path=${pathStr}${specStr}${ackStr} ctx=${run.ctx} ttl=${run.ttl}ms` +
+    ` dispatch=${run.dispatch} verify=${run.verify} total=${totalMs}ms`
   );
 }
 
@@ -614,6 +956,17 @@ async function _maybeWriteTrace(run, classifierResult, toolResult, verifierResul
     if (timings)      acc.setTimings(timings);
     if (run.chainStep) acc.setChainStep(run.chainStep);
     if (run.error)     acc.setError(run.error);
+    // M4.4.1 — propagate routing path; M4.5 sets 'agent', M5.0 sets 'plan'.
+    if (run.path)      acc.setPath(run.path);
+    if (Array.isArray(run.agentSteps)) {
+      for (const step of run.agentSteps) acc.addAgentStep(step);
+    }
+    // M5.0 — record the planner's plan + executed steps + replan count.
+    if (run.plan)                         acc.setPlan(run.plan);
+    if (Array.isArray(run.planSteps)) {
+      for (const step of run.planSteps) acc.addPlanStep(step);
+    }
+    if (run.replans) for (let i = 0; i < run.replans; i++) acc.incReplans();
 
     const record = acc.build();
     traceMod.emitTrace(hudSend, record);
@@ -621,6 +974,106 @@ async function _maybeWriteTrace(run, classifierResult, toolResult, verifierResul
   } catch (err) {
     console.warn('[pipeline] Trace build failed (non-fatal):', err.message);
   }
+}
+
+// ─── M5.4: Result-panel emission helpers ─────────────────────────────────────
+
+/**
+ * Emit `jarvis:results` to the HUD when a plan produced a result-bearing tool
+ * call (web.search, browser.search, browser.tabs.list, file.find). Saves the
+ * active result set in context so "open the second one" works after the
+ * plan finishes.
+ */
+function _maybeEmitResultsFromPlan(hudSend, planResult) {
+  if (!planResult || !Array.isArray(planResult.planSteps)) return;
+  // Walk the executed steps in reverse — the most recent result-producing step wins.
+  for (let i = planResult.planSteps.length - 1; i >= 0; i--) {
+    const step = planResult.planSteps[i];
+    if (!step || !step.ok || !step.result) continue;
+    const cards = _resultCardsFor(step);
+    if (cards) {
+      _emitResultCards(hudSend, cards);
+      return;
+    }
+  }
+}
+
+/**
+ * Convert the last dispatch result of a *pattern*-routed tool into a panel
+ * payload, when applicable. Called from the single-intent flow.
+ */
+function _maybeEmitResultsFromDispatch(hudSend, classifierResult, toolResult) {
+  if (!toolResult || !toolResult.ok) return;
+  const fakeStep = {
+    tool:   classifierResult ? classifierResult.intent : '',
+    params: classifierResult ? classifierResult.params : {},
+    result: toolResult,
+    ok:     true,
+  };
+  const cards = _resultCardsFor(fakeStep, toolResult.data);
+  if (cards) _emitResultCards(hudSend, cards);
+}
+
+function _resultCardsFor(step, fullData) {
+  if (!step || !step.tool) return null;
+  // Plan-step records carry an abbreviated `result` summary, so for the *last*
+  // step we accept fullData (passed from dispatch) when present.
+  const data = fullData || (step.result && step.result.data) || null;
+  if (!data) return null;
+
+  if ((step.tool === 'web.search' || step.tool === 'browser.search') && Array.isArray(data.results) && data.results.length) {
+    return {
+      kind:    'web',
+      source:  step.tool,
+      query:   data.query || (step.params && step.params.query) || '',
+      cards:   data.results.slice(0, 5).map((r, i) => ({
+        index:   i + 1,
+        title:   r.title || r.url || '',
+        url:     r.url || '',
+        snippet: r.snippet || '',
+      })),
+    };
+  }
+  if (step.tool === 'browser.tabs.list' && Array.isArray(data.tabs) && data.tabs.length) {
+    return {
+      kind:   'tabs',
+      source: step.tool,
+      cards:  data.tabs.slice(0, 8).map((t, i) => ({
+        index: i + 1,
+        title: t.title || t.url || '',
+        url:   t.url   || '',
+        tabId: t.tabId,
+        active: !!t.active,
+      })),
+    };
+  }
+  if (step.tool === 'file.find' && Array.isArray(data.matches) && data.matches.length > 1) {
+    return {
+      kind:   'files',
+      source: step.tool,
+      cards:  data.matches.slice(0, 5).map((m, i) => ({
+        index: i + 1,
+        title: m.name,
+        path:  m.path,
+      })),
+    };
+  }
+  return null;
+}
+
+function _emitResultCards(hudSend, payload) {
+  if (!payload || !Array.isArray(payload.cards) || payload.cards.length === 0) return;
+  // Save in context so system.select / "the second one" can resolve later.
+  try {
+    context.setActiveResultSet({
+      kind:   payload.kind,
+      source: payload.source,
+      cards:  payload.cards,
+    });
+  } catch { /* context setter optional in tests */ }
+  try {
+    hudSend('jarvis:results', payload);
+  } catch { /* HUD optional */ }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -725,4 +1178,49 @@ function _injectStandaloneContext(classifierResult) {
   }
 }
 
-module.exports = { runPipelineFromText, runPipelineFromAudio };
+// ─── M4.8: Record last action for "do that again" / "undo that" ─────────────
+
+const _META_INTENTS = new Set([
+  'system.repeat', 'system.undo',
+  'system.cancel', 'system.select',
+  'system.unsupported',
+]);
+
+/**
+ * Record a successful action for later repeat/undo. Filters meta intents so
+ * "do that again" never re-triggers itself.
+ */
+function _recordLastAction(classifierResult, toolResult, transcript) {
+  if (!classifierResult || !classifierResult.intent) return;
+  if (_META_INTENTS.has(classifierResult.intent)) return;
+  if (!toolResult || !toolResult.ok) return;
+  context.setLastAction({
+    intent:       classifierResult.intent,
+    params:       classifierResult.params || {},
+    result:       toolResult,
+    transcript:   transcript || classifierResult.raw || '',
+    needsConfirm: classifierResult.needsConfirm === true,
+  });
+}
+
+// ─── M4.5: Context badge event ────────────────────────────────────────────────
+
+/**
+ * After a successful dispatch, emit jarvis:context if any context is active.
+ * Renderer uses this to show/fade the context badge.
+ */
+function _maybeEmitContextEvent(hudSend) {
+  const fileCtx = context.getFileTarget();
+  const winCtx  = context.getWindowTarget();
+
+  if (!fileCtx && !winCtx) return;
+
+  const ttlMs = require('../settings').getSetting('jarvisContextTtlMs', 30000);
+  hudSend('jarvis:context', {
+    file:   fileCtx ? fileCtx.name   : null,
+    window: winCtx  ? winCtx.processName : null,
+    ttlMs,
+  });
+}
+
+module.exports = { runPipelineFromText, runPipelineFromAudio, prewarmClassify, cancelCurrent, maybeVoiceCancel };

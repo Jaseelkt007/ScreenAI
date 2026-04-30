@@ -45,14 +45,86 @@ const elevenlabsLink         = document.getElementById('elevenlabs-link');
 const voiceHotkeyDisplay     = document.getElementById('voice-hotkey-display');
 const recordVoiceHotkeyBtn   = document.getElementById('record-voice-hotkey-btn');
 const resetVoiceHotkeyBtn    = document.getElementById('reset-voice-hotkey-btn');
-const voiceIdInput           = document.getElementById('voice-id-input');
+const voiceIdSelect          = document.getElementById('voice-id-select');
+
+// Phase 5 — Web search / scrape / browser DOM refs
+const websearchProviderSelect    = document.getElementById('websearch-provider-select');
+const tavilyKeyField             = document.getElementById('tavily-key-field');
+const tavilyKeyInput             = document.getElementById('tavily-key-input');
+const toggleTavilyVisBtn         = document.getElementById('toggle-tavily-visibility');
+const tavilyLink                 = document.getElementById('tavily-link');
+const braveKeyField              = document.getElementById('brave-key-field');
+const braveKeyInput              = document.getElementById('brave-key-input');
+const toggleBraveVisBtn          = document.getElementById('toggle-brave-visibility');
+const braveLink                  = document.getElementById('brave-link');
+const apifyTokenInput            = document.getElementById('apify-token-input');
+const toggleApifyVisBtn          = document.getElementById('toggle-apify-visibility');
+const apifyLink                  = document.getElementById('apify-link');
+const chromeAutoLaunchCheckbox   = document.getElementById('chrome-autolaunch-checkbox');
+const narrationEnabledCheckbox   = document.getElementById('narration-enabled-checkbox');
+const visionEnabledCheckbox      = document.getElementById('vision-enabled-checkbox');
 
 //── State ──────────────────────────────────────────────────────────────────
 let recordingHotkey      = false;
 let currentHotkey        = '';   // empty string = use platform defaults (F7)
 let recordingVoiceHotkey = false;
-let currentVoiceHotkey   = '';   // empty string = use platform defaults (F8)
+let currentJarvisHotkey  = '';   // empty string = default (Right Alt) for Jarvis PTT
 let mistralInstallMonitor = null;
+
+// ── PTT key mapping ────────────────────────────────────────────────────────
+// Maps a KeyboardEvent.code to a uiohook-napi UiohookKey name. Only keys
+// that make sense as a push-to-talk single-key hotkey are listed.
+const PTT_KEY_MAP = {
+  AltRight:     'AltRight',
+  AltLeft:      'Alt',
+  ControlRight: 'CtrlRight',
+  ControlLeft:  'Ctrl',
+  ShiftRight:   'ShiftRight',
+  ShiftLeft:    'Shift',
+  CapsLock:     'CapsLock',
+  Pause:        'Pause',
+  ScrollLock:   'ScrollLock',
+  Tab:          'Tab',
+  Backquote:    'Backquote',
+  Space:        'Space',
+};
+for (let i = 1; i <= 12; i++) PTT_KEY_MAP[`F${i}`] = `F${i}`;
+for (let c = 65; c <= 90; c++) {
+  const letter = String.fromCharCode(c);
+  PTT_KEY_MAP[`Key${letter}`] = letter;
+}
+for (let d = 0; d <= 9; d++) PTT_KEY_MAP[`Digit${d}`] = String(d);
+
+const PTT_DISPLAY_LABEL = {
+  AltRight:     'Right Alt',
+  Alt:          'Left Alt',
+  CtrlRight:    'Right Ctrl',
+  Ctrl:         'Left Ctrl',
+  ShiftRight:   'Right Shift',
+  Shift:        'Left Shift',
+  Backquote:    '`',
+};
+
+function pttHotkeyLabel(name) {
+  if (!name) return 'Right Alt';
+  return PTT_DISPLAY_LABEL[name] || name;
+}
+
+// Voice select: if the saved voiceId isn't one of the built-in options
+// (e.g. someone pasted a custom ID into settings.json directly), append a
+// transient option for it so the dropdown reflects the actual saved state
+// instead of silently snapping to the first option.
+function setVoiceSelectValue(id) {
+  if (!voiceIdSelect) return;
+  const has = Array.from(voiceIdSelect.options).some((o) => o.value === id);
+  if (!has) {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = `Custom (${id})`;
+    voiceIdSelect.appendChild(opt);
+  }
+  voiceIdSelect.value = id;
+}
 
 const MISTRAL_INSTALL_POLL_MS = 3000;
 const MISTRAL_INSTALL_TIMEOUT_MS = 180000;
@@ -87,9 +159,9 @@ window.electronAPI.settingsGet().then((s) => {
   // Voice settings
   voiceEnabledCheckbox.checked = s.voiceEnabled === true;
   elevenlabsKeyInput.value     = s.elevenlabsApiKey || '';
-  voiceIdInput.value           = s.voiceId || 'JBFqnCBsd6RMkjVDRZzb';
-  currentVoiceHotkey           = s.voiceHotkey || '';
-  voiceHotkeyDisplay.textContent = currentVoiceHotkey || 'F8';
+  setVoiceSelectValue(s.voiceId || 'EXAVITQu4vr4xnSDxMaL');
+  currentJarvisHotkey          = s.jarvisHotkey || '';
+  voiceHotkeyDisplay.textContent = pttHotkeyLabel(currentJarvisHotkey);
   updateVoiceSettingsVisibility();
 
   // Agent settings
@@ -97,6 +169,16 @@ window.electronAPI.settingsGet().then((s) => {
   agentBackendSelect.value     = s.agentBackend || 'codex';
   mistralKeyInput.value        = s.mistralApiKey || '';
   updateAgentSections();
+
+  // Phase 5 — Web / browser / pipeline
+  websearchProviderSelect.value     = s.jarvisWebSearchProvider || 'tavily';
+  tavilyKeyInput.value              = s.jarvisTavilyApiKey || '';
+  braveKeyInput.value               = s.jarvisBraveApiKey || '';
+  apifyTokenInput.value             = s.jarvisApifyToken || '';
+  chromeAutoLaunchCheckbox.checked  = s.jarvisChromeAutoLaunch !== false;
+  narrationEnabledCheckbox.checked  = s.jarvisNarrationEnabled !== false;
+  visionEnabledCheckbox.checked     = s.jarvisVisionEnabled    !== false;
+  updateWebSearchProviderVisibility();
 });
 
 // ── Model dropdown → show/hide OpenAI key ─────────────────────────────────
@@ -171,15 +253,15 @@ function stopRecording() {
   hotkeyDisplay.classList.remove('recording');
 }
 
-// ── Voice hotkey recording ─────────────────────────────────────────────────
+// ── Jarvis PTT hotkey recording ────────────────────────────────────────────
 recordVoiceHotkeyBtn.addEventListener('click', () => {
   if (recordingVoiceHotkey) stopVoiceHotkeyRecording();
   else startVoiceHotkeyRecording();
 });
 
 resetVoiceHotkeyBtn.addEventListener('click', () => {
-  currentVoiceHotkey = '';
-  voiceHotkeyDisplay.textContent = 'F8';
+  currentJarvisHotkey = '';
+  voiceHotkeyDisplay.textContent = 'Right Alt';
   voiceHotkeyDisplay.classList.remove('recording');
   stopVoiceHotkeyRecording();
 });
@@ -188,7 +270,7 @@ function startVoiceHotkeyRecording() {
   if (recordingHotkey) stopRecording();
   recordingVoiceHotkey = true;
   recordVoiceHotkeyBtn.textContent = 'CANCEL';
-  voiceHotkeyDisplay.textContent   = 'PRESS KEY…';
+  voiceHotkeyDisplay.textContent   = 'HOLD A KEY…';
   voiceHotkeyDisplay.classList.add('recording');
 }
 
@@ -204,7 +286,26 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Ignore bare modifier key presses
+  // ── Jarvis PTT hotkey: capture by e.code so Left/Right Alt are distinct.
+  // PTT keys are single keys, not Electron-style chord combos.
+  if (recordingVoiceHotkey) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const mapped = PTT_KEY_MAP[e.code];
+    if (!mapped) {
+      // Unsupported PTT key — flash a hint and keep recording.
+      voiceHotkeyDisplay.textContent = 'UNSUPPORTED — TRY ANOTHER';
+      return;
+    }
+
+    currentJarvisHotkey = mapped;
+    voiceHotkeyDisplay.textContent = pttHotkeyLabel(mapped);
+    stopVoiceHotkeyRecording();
+    return;
+  }
+
+  // ── Capture hotkey: Electron globalShortcut chord format (existing).
   if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
 
   e.preventDefault();
@@ -215,7 +316,6 @@ document.addEventListener('keydown', (e) => {
   if (e.altKey)  parts.push('Alt');
   if (e.shiftKey) parts.push('Shift');
 
-  // Map browser key names to Electron globalShortcut format
   const KEY_MAP = {
     ' ':           'Space',
     'Enter':       'Return',
@@ -242,10 +342,6 @@ document.addEventListener('keydown', (e) => {
     currentHotkey = combo;
     hotkeyDisplay.textContent = combo;
     stopRecording();
-  } else if (recordingVoiceHotkey) {
-    currentVoiceHotkey = combo;
-    voiceHotkeyDisplay.textContent = combo;
-    stopVoiceHotkeyRecording();
   }
 });
 
@@ -279,12 +375,20 @@ saveBtn.addEventListener('click', async () => {
     firstRun:         false,
     voiceEnabled:     voiceEnabledCheckbox.checked,
     elevenlabsApiKey: elevenlabsKeyInput.value.trim(),
-    voiceHotkey:      currentVoiceHotkey,
-    voiceId:          voiceIdInput.value.trim() || 'JBFqnCBsd6RMkjVDRZzb',
+    jarvisHotkey:     currentJarvisHotkey,
+    voiceId:          voiceIdSelect.value || 'EXAVITQu4vr4xnSDxMaL',
     // Agent subsystem
     agentEnabled:     agentEnabledCheckbox.checked,
     agentBackend:     agentBackendSelect.value,
     mistralApiKey:    mistralKeyInput.value.trim(),
+    // Phase 5 — Web / browser / pipeline
+    jarvisWebSearchProvider: websearchProviderSelect.value,
+    jarvisTavilyApiKey:      tavilyKeyInput.value.trim(),
+    jarvisBraveApiKey:       braveKeyInput.value.trim(),
+    jarvisApifyToken:        apifyTokenInput.value.trim(),
+    jarvisChromeAutoLaunch:  chromeAutoLaunchCheckbox.checked,
+    jarvisNarrationEnabled:  narrationEnabledCheckbox.checked,
+    jarvisVisionEnabled:     visionEnabledCheckbox.checked,
   });
 
   if (result.ok) {
@@ -444,6 +548,36 @@ if (elevenlabsVoicesLink) {
     window.electronAPI.openExternal('https://elevenlabs.io/voice-library');
   });
 }
+
+// ── Phase 5 — Web search provider switch ──────────────────────────────────
+function updateWebSearchProviderVisibility() {
+  const provider = websearchProviderSelect.value;
+  tavilyKeyField.classList.toggle('hidden', provider !== 'tavily');
+  braveKeyField.classList.toggle('hidden',  provider !== 'brave');
+}
+websearchProviderSelect.addEventListener('change', updateWebSearchProviderVisibility);
+
+// Phase 5 — key visibility toggles
+toggleTavilyVisBtn.addEventListener('click', () => {
+  tavilyKeyInput.type = tavilyKeyInput.type === 'password' ? 'text' : 'password';
+});
+toggleBraveVisBtn.addEventListener('click', () => {
+  braveKeyInput.type = braveKeyInput.type === 'password' ? 'text' : 'password';
+});
+toggleApifyVisBtn.addEventListener('click', () => {
+  apifyTokenInput.type = apifyTokenInput.type === 'password' ? 'text' : 'password';
+});
+
+// Phase 5 — external links
+tavilyLink.addEventListener('click', () => {
+  window.electronAPI.openExternal('https://app.tavily.com/sign-in');
+});
+braveLink.addEventListener('click', () => {
+  window.electronAPI.openExternal('https://api-dashboard.search.brave.com/app/keys');
+});
+apifyLink.addEventListener('click', () => {
+  window.electronAPI.openExternal('https://console.apify.com/account/integrations');
+});
 
 // ── Tab switching ──────────────────────────────────────────────────────────
 document.querySelectorAll('.tab-btn').forEach((btn) => {

@@ -242,9 +242,9 @@ app.whenReady().then(() => {
   }
 
   // ── Jarvis pipeline (Phase 1) ─────────────────────────────────────────────
-  jarvis.init(backgroundWindow);
+  jarvis.init();
 
-  console.log('[App] Screen AI Assistant running. F7 / Ctrl+Shift+Y to capture. F8 for voice guide.');
+  console.log('[App] Screen AI Assistant running. F7 to capture · F8 voice guide · Hold Right Alt for Jarvis.');
 });
 
 app.on('window-all-closed', (e) => e.preventDefault());
@@ -441,6 +441,9 @@ ipcMain.handle('settings:save', (_event, partial) => {
     applyStartupSetting();
     if ('customHotkey' in partial || 'voiceHotkey' in partial || 'voiceEnabled' in partial) {
       reregisterHotkeys();
+    }
+    if ('jarvisHotkey' in partial && typeof jarvis.reregisterHotkey === 'function') {
+      jarvis.reregisterHotkey();
     }
     console.log('[Settings] Saved:', JSON.stringify(redactForLog(partial)));
     return { ok: true };

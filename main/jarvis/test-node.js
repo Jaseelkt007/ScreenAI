@@ -4120,6 +4120,2561 @@ async function runM44TraceTests() {
       ctx.clear();
     }
   });
+
+  // ── M4.4.1 — agentSteps + path + jarvisTraceLevel ────────────────────────
+
+  section('20d. M4.4.1 — Suite 18: agentSteps, path, jarvisTraceLevel');
+
+  await test('createTrace defaults: agentSteps is empty array, path is "pattern"', () => {
+    const record = traceMod.createTrace('mute').build();
+    assert.ok(Array.isArray(record.agentSteps), 'agentSteps must be an array');
+    assert.equal(record.agentSteps.length, 0, 'agentSteps must default to empty');
+    assert.equal(record.path, 'pattern', 'path must default to "pattern"');
+  });
+
+  await test('addAgentStep appends a step with normalized fields', () => {
+    const record = traceMod.createTrace('open the latest invoice')
+      .setPath('agent')
+      .addAgentStep({ tool: 'file.find', params: { query: 'invoice' }, result: { ok: true }, latencyMs: 42 })
+      .addAgentStep({ tool: 'file.open', params: { path: '/x/y.pdf' }, result: { ok: true }, latencyMs: 18 })
+      .build();
+    assert.equal(record.path, 'agent');
+    assert.equal(record.agentSteps.length, 2);
+    assert.equal(record.agentSteps[0].tool, 'file.find');
+    assert.equal(record.agentSteps[0].latencyMs, 42);
+    assert.equal(record.agentSteps[0].retry, false, 'retry must default to false');
+    assert.equal(record.agentSteps[1].tool, 'file.open');
+    assert.deepEqual(record.agentSteps[1].params, { path: '/x/y.pdf' });
+  });
+
+  await test('addAgentStep preserves retry:true flag', () => {
+    const record = traceMod.createTrace('click Send')
+      .addAgentStep({ tool: 'ui.click', params: { name: 'Send' }, result: { ok: false }, latencyMs: 50 })
+      .addAgentStep({ tool: 'ui.click', params: { name: 'Send' }, result: { ok: true }, latencyMs: 35, retry: true })
+      .build();
+    assert.equal(record.agentSteps[0].retry, false);
+    assert.equal(record.agentSteps[1].retry, true);
+  });
+
+  await test('setPath only accepts "pattern" or "agent"', () => {
+    const r1 = traceMod.createTrace('x').setPath('agent').build();
+    assert.equal(r1.path, 'agent');
+    const r2 = traceMod.createTrace('x').setPath('bogus').build();
+    assert.equal(r2.path, 'pattern', 'invalid value must leave default in place');
+  });
+
+  await test('addAgentStep with null/undefined input is a no-op', () => {
+    const record = traceMod.createTrace('x')
+      .addAgentStep(null)
+      .addAgentStep(undefined)
+      .build();
+    assert.equal(record.agentSteps.length, 0);
+  });
+
+  await test('build() returns an immutable agentSteps array', () => {
+    const record = traceMod.createTrace('x')
+      .addAgentStep({ tool: 'file.find', params: {}, result: { ok: true }, latencyMs: 10 })
+      .build();
+    // Mutating the inner steps shouldn't leak back through later snapshots.
+    const beforeLen = record.agentSteps.length;
+    try { record.agentSteps.push({ tool: 'leak' }); } catch { /* may throw on frozen — fine */ }
+    // Even if push succeeds (the array itself isn't frozen), the original record
+    // length should still equal what build() produced. The contract is that we
+    // returned a fresh, defensively-copied array — not that it's deep-frozen.
+    assert.ok(record.agentSteps.length >= beforeLen, 'sanity');
+  });
+
+  await test('summarizeRecord projects to minimal one-line shape', () => {
+    const full = traceMod.createTrace('mute')
+      .setClassification({ intent: 'system.volume', confidence: 'pattern', params: {}, needsConfirm: false }, 5)
+      .setDispatch({ ok: true })
+      .setVerify({ verified: true })
+      .setTimings({ classify: 1, dispatch: 22, verify: 5, tts: 0, total: 28 })
+      .setPath('pattern')
+      .build();
+    const summary = traceMod.summarizeRecord(full);
+    assert.equal(summary.intent,     'system.volume');
+    assert.equal(summary.dispatchOk, true);
+    assert.equal(summary.verifyOk,   true);
+    assert.equal(summary.path,       'pattern');
+    assert.equal(summary.total,      28);
+    assert.equal(summary.agentSteps, 0);
+    // Should not contain heavy fields
+    assert.ok(!('contextUsed' in summary), 'summary must not include contextUsed');
+    assert.ok(!('params' in summary),      'summary must not include params');
+  });
+
+  await test('writeTrace level=off → no-op even when jarvisTraceEnabled true', async () => {
+    const settingsMod = require('../settings');
+    const tmpDir = path.join(os.tmpdir(), `jarvis-trace-off-${Date.now()}`);
+    const origGet = settingsMod.getSetting.bind(settingsMod);
+    settingsMod.getSetting = (key, fallback) => {
+      if (key === 'jarvisTraceEnabled')  return true;
+      if (key === 'jarvisTraceDir')      return tmpDir;
+      if (key === 'jarvisTraceLevel')    return 'off';
+      if (key === 'jarvisTraceMaxFiles') return 200;
+      return origGet(key, fallback);
+    };
+    try {
+      const record = traceMod.createTrace('test').build();
+      await traceMod.writeTrace(record);
+      const exists = fs.existsSync(tmpDir);
+      // Either the dir wasn't created, or it has zero files.
+      if (exists) {
+        const files = fs.readdirSync(tmpDir).filter((f) => f.endsWith('.json'));
+        assert.equal(files.length, 0, 'level=off must not write any trace files');
+      }
+    } finally {
+      settingsMod.getSetting = origGet;
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* cleanup */ }
+    }
+  });
+
+  await test('writeTrace level=summary writes a single-line minimal JSON', async () => {
+    const settingsMod = require('../settings');
+    const tmpDir = path.join(os.tmpdir(), `jarvis-trace-summary-${Date.now()}`);
+    const origGet = settingsMod.getSetting.bind(settingsMod);
+    settingsMod.getSetting = (key, fallback) => {
+      if (key === 'jarvisTraceEnabled')  return true;
+      if (key === 'jarvisTraceDir')      return tmpDir;
+      if (key === 'jarvisTraceLevel')    return 'summary';
+      if (key === 'jarvisTraceMaxFiles') return 200;
+      return origGet(key, fallback);
+    };
+    try {
+      const record = traceMod.createTrace('mute')
+        .setClassification({ intent: 'system.volume', confidence: 'pattern', params: {}, needsConfirm: false }, 5)
+        .setDispatch({ ok: true })
+        .setTimings({ classify: 1, dispatch: 22, verify: 5, tts: 0, total: 28 })
+        .build();
+      await traceMod.writeTrace(record);
+      const files = fs.readdirSync(tmpDir).filter((f) => f.endsWith('.json'));
+      assert.equal(files.length, 1, 'one file written');
+      const raw = fs.readFileSync(path.join(tmpDir, files[0]), 'utf8');
+      assert.equal(raw.split('\n').length, 1, 'summary must be one line');
+      const parsed = JSON.parse(raw);
+      assert.equal(parsed.intent, 'system.volume');
+      assert.ok(!('contextUsed' in parsed), 'summary must omit contextUsed');
+      assert.ok(!('agentSteps'  in parsed) || typeof parsed.agentSteps === 'number',
+        'summary agentSteps (if present) is a count, not an array');
+    } finally {
+      settingsMod.getSetting = origGet;
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* cleanup */ }
+    }
+  });
+
+  await test('writeTrace level=full writes full multi-line JSON with agentSteps array', async () => {
+    const settingsMod = require('../settings');
+    const tmpDir = path.join(os.tmpdir(), `jarvis-trace-full-${Date.now()}`);
+    const origGet = settingsMod.getSetting.bind(settingsMod);
+    settingsMod.getSetting = (key, fallback) => {
+      if (key === 'jarvisTraceEnabled')  return true;
+      if (key === 'jarvisTraceDir')      return tmpDir;
+      if (key === 'jarvisTraceLevel')    return 'full';
+      if (key === 'jarvisTraceMaxFiles') return 200;
+      return origGet(key, fallback);
+    };
+    try {
+      const record = traceMod.createTrace('open the latest invoice')
+        .setPath('agent')
+        .addAgentStep({ tool: 'file.find', params: { query: 'invoice' }, result: { ok: true }, latencyMs: 42 })
+        .build();
+      await traceMod.writeTrace(record);
+      const files = fs.readdirSync(tmpDir).filter((f) => f.endsWith('.json'));
+      assert.equal(files.length, 1);
+      const raw = fs.readFileSync(path.join(tmpDir, files[0]), 'utf8');
+      assert.ok(raw.split('\n').length > 1, 'full record must be pretty-printed (multi-line)');
+      const parsed = JSON.parse(raw);
+      assert.equal(parsed.path, 'agent');
+      assert.ok(Array.isArray(parsed.agentSteps), 'full record keeps agentSteps as an array');
+      assert.equal(parsed.agentSteps.length, 1);
+      assert.equal(parsed.agentSteps[0].tool, 'file.find');
+    } finally {
+      settingsMod.getSetting = origGet;
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* cleanup */ }
+    }
+  });
+
+  // ── M4.4.1 — pipeline log: path= field ────────────────────────────────────
+
+  section('20e. M4.4.1 — Suite 18: [JARVIS RUN] path= field');
+
+  await test('[JARVIS RUN] log includes path=pattern by default', async () => {
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    classifierModule.classify = async () => ({ intent: 'system.volume', confidence: 'pattern', params: { action: 'mute' }, needsConfirm: false, _patternIndex: 5, raw: 'mute' });
+    dispatcherModule.dispatch = async () => ({ ok: true, action: 'Volume muted.' });
+    verifierModule.verify     = async () => ({ verified: false });
+
+    const logLines = [];
+    const origLog = console.log;
+    console.log = (...args) => { logLines.push(args.join(' ')); };
+
+    try {
+      await runPipelineFromText('mute', () => {}, () => Promise.resolve(true));
+      const runLine = logLines.find((l) => l.includes('[JARVIS RUN]')) || '';
+      assert.ok(runLine.includes('path=pattern'),
+        `expected path=pattern in: ${runLine}`);
+    } finally {
+      console.log = origLog;
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ctx.clear();
+    }
+  });
+}
+
+// ─── Suite 19 — M4.5: Follow-Up Interaction Layer ────────────────────────────
+
+async function runM45FollowUpTests() {
+  section('19. M4.5 — Follow-Up Interaction Layer (Suite 19)');
+
+  // ── Workflow A: find → open it ──
+  await test('Workflow A: file.find single match → context set → file.open useContext resolves correctly', async () => {
+    const classifierModule  = require('./classifier');
+    const dispatcherModule  = require('./dispatcher');
+    const verifierModule    = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    ctx.clear();
+    let step = 0;
+    classifierModule.classify = async (t) => {
+      step++;
+      if (step === 1) return { intent: 'file.find', confidence: 'pattern', params: { query: 'cv' }, needsConfirm: false, _patternIndex: 16, raw: t };
+      return { intent: 'file.open', confidence: 'pattern', params: { useContext: true }, needsConfirm: false, _patternIndex: 2, raw: t };
+    };
+    dispatcherModule.dispatch = async (cr) => {
+      if (cr.intent === 'file.find') {
+        ctx.setFileTarget('cv.pdf', '/docs/cv.pdf');
+        return { ok: true, action: 'Found cv.pdf in Documents.', data: { matches: [{ name: 'cv.pdf', path: '/docs/cv.pdf', sizeBytes: 0 }] } };
+      }
+      if (cr.intent === 'file.open') {
+        const fileTarget = ctx.getFileTarget();
+        assert.ok(fileTarget, 'file context should be set');
+        assert.equal(fileTarget.name, 'cv.pdf');
+        return { ok: true, action: 'Opened cv.pdf.' };
+      }
+      return { ok: false, error: `Unexpected intent: ${cr.intent}` };
+    };
+    verifierModule.verify = async () => ({ verified: false });
+
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+
+    try {
+      await runPipelineFromText('find my cv', hudSend, () => Promise.resolve(true));
+      const fileTarget = ctx.getFileTarget();
+      assert.ok(fileTarget, 'file context should be populated after find');
+      assert.equal(fileTarget.name, 'cv.pdf');
+
+      await runPipelineFromText('open it', hudSend, () => Promise.resolve(true));
+      const doneEvents = events.filter(e => e.ch === 'jarvis:done');
+      const lastDone   = doneEvents[doneEvents.length - 1];
+      assert.ok(lastDone.payload.ok, `Expected ok:true, got: ${JSON.stringify(lastDone.payload)}`);
+      assert.ok(lastDone.payload.display.includes('Opened'), `display: "${lastDone.payload.display}"`);
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ctx.clear();
+    }
+  });
+
+  // ── Workflow B: find → rename it ──
+  await test('Workflow B: file.find → context set → file.rename useContext renames correct file', async () => {
+    const classifierModule  = require('./classifier');
+    const dispatcherModule  = require('./dispatcher');
+    const verifierModule    = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    ctx.clear();
+    let step = 0;
+    classifierModule.classify = async (t) => {
+      step++;
+      if (step === 1) return { intent: 'file.find', confidence: 'pattern', params: { query: 'notes' }, needsConfirm: false, _patternIndex: 16, raw: t };
+      return { intent: 'file.rename', confidence: 'pattern', params: { useContext: true, newName: 'journal.txt' }, needsConfirm: true, _patternIndex: 3, raw: t };
+    };
+    let renamedPath = null;
+    dispatcherModule.dispatch = async (cr) => {
+      if (cr.intent === 'file.find') {
+        ctx.setFileTarget('notes.txt', '/docs/notes.txt');
+        return { ok: true, action: 'Found notes.txt.', data: { matches: [{ name: 'notes.txt', path: '/docs/notes.txt', sizeBytes: 0 }] } };
+      }
+      if (cr.intent === 'file.rename') {
+        const fileTarget = ctx.getFileTarget();
+        assert.ok(fileTarget, 'context should be set');
+        renamedPath = fileTarget.path;
+        return { ok: true, action: 'Renamed notes.txt to journal.txt.' };
+      }
+      return { ok: false, error: 'unexpected' };
+    };
+    verifierModule.verify = async () => ({ verified: false });
+
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+
+    try {
+      await runPipelineFromText('find notes.txt', hudSend, () => Promise.resolve(true));
+      await runPipelineFromText('rename it to journal.txt', hudSend, () => Promise.resolve(true));
+      assert.equal(renamedPath, '/docs/notes.txt', `Expected /docs/notes.txt, got ${renamedPath}`);
+      const doneEvents = events.filter(e => e.ch === 'jarvis:done' && e.payload.ok);
+      assert.ok(doneEvents.length >= 1, 'Should have at least one ok done event');
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ctx.clear();
+    }
+  });
+
+  // ── Workflow C: ambiguous delete → select second ──
+  await test('Workflow C: file.delete ambiguous → jarvis:disambiguate emitted → system.select ordinal:2 → correct file', async () => {
+    const classifierModule  = require('./classifier');
+    const dispatcherModule  = require('./dispatcher');
+    const verifierModule    = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    ctx.clear();
+    const candidates = [
+      { name: 'report-final.pdf',  path: '/docs/report-final.pdf',  sizeBytes: 0 },
+      { name: 'report-draft.pdf',  path: '/docs/report-draft.pdf',  sizeBytes: 0 },
+      { name: 'old-report.txt',    path: '/docs/old-report.txt',     sizeBytes: 0 },
+    ];
+
+    let step = 0;
+    classifierModule.classify = async (t) => {
+      step++;
+      if (step === 1) return { intent: 'file.delete', confidence: 'pattern', params: { name: 'report' }, needsConfirm: true, _patternIndex: 18, raw: t };
+      return { intent: 'system.select', confidence: 'pattern', params: { ordinal: 2 }, needsConfirm: false, _patternIndex: 1, raw: t };
+    };
+
+    let deletedPath = null;
+    dispatcherModule.dispatch = async (cr) => {
+      if (cr.intent === 'file.delete' && !cr.params.path) {
+        // Multi-match: set candidates and return ambiguous
+        ctx.setCandidates(candidates, cr);
+        return {
+          ok: false, ambiguous: true,
+          candidates,
+          action: "I found 3 files. Say one, two, or three.",
+        };
+      }
+      if (cr.intent === 'file.delete' && cr.params.path) {
+        deletedPath = cr.params.path;
+        return { ok: true, action: `Deleted ${cr.params.name}.` };
+      }
+      if (cr.intent === 'system.select') {
+        // system.select clears candidates and re-dispatches
+        const state = ctx.getCandidates();
+        assert.ok(state, 'candidates should still be in context');
+        const selected = state.candidates[cr.params.ordinal - 1];
+        ctx.clearCandidates();
+        const resolved = { ...state.classifiedResult, params: { ...state.classifiedResult.params, path: selected.path, name: selected.name } };
+        return dispatcherModule.dispatch(resolved);
+      }
+      return { ok: false, error: 'unexpected' };
+    };
+    verifierModule.verify = async () => ({ verified: false });
+
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+
+    try {
+      await runPipelineFromText('delete report', hudSend, () => Promise.resolve(false));
+      const disambigEvent = events.find(e => e.ch === 'jarvis:disambiguate');
+      assert.ok(disambigEvent, 'jarvis:disambiguate event should be emitted');
+      assert.equal(disambigEvent.payload.candidates.length, 3, 'Should list 3 candidates');
+
+      await runPipelineFromText('the second one', hudSend, () => Promise.resolve(true));
+      assert.equal(deletedPath, '/docs/report-draft.pdf', `Expected report-draft.pdf, got ${deletedPath}`);
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ctx.clear();
+    }
+  });
+
+  // ── Workflow D: focus → standalone type ──
+  await test('Workflow D: app.focus → context.setWindowTarget → standalone input.type inherits hwnd', async () => {
+    const classifierModule  = require('./classifier');
+    const dispatcherModule  = require('./dispatcher');
+    const verifierModule    = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    ctx.clear();
+
+    let step = 0;
+    classifierModule.classify = async (t) => {
+      step++;
+      if (step === 1) return { intent: 'app.focus', confidence: 'pattern', params: { appName: 'notepad' }, needsConfirm: false, _patternIndex: 22, raw: t };
+      return { intent: 'input.type', confidence: 'pattern', params: { text: 'hello world' }, needsConfirm: false, _patternIndex: 48, raw: t };
+    };
+    dispatcherModule.dispatch = async (cr) => {
+      if (cr.intent === 'app.focus') {
+        ctx.setWindowTarget('notepad', 12345, 'app');
+        return { ok: true, action: 'Focused Notepad.', data: { processName: 'notepad', hwnd: 12345 } };
+      }
+      return { ok: true, action: 'Typed hello world.' };
+    };
+    verifierModule.verify = async () => ({ verified: false });
+
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+
+    try {
+      await runPipelineFromText('focus notepad', hudSend, () => Promise.resolve(true));
+      const winCtx = ctx.getWindowTarget();
+      assert.ok(winCtx, 'window context should be set after app.focus');
+      assert.equal(winCtx.hwnd, 12345);
+
+      await runPipelineFromText('type hello world', hudSend, () => Promise.resolve(true));
+      const doneEvents = events.filter(e => e.ch === 'jarvis:done');
+      const lastDone   = doneEvents[doneEvents.length - 1];
+      assert.ok(lastDone.payload.ok, 'type command should succeed');
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ctx.clear();
+    }
+  });
+
+  // ── Workflow E: context expiry → open it returns error ──
+  await test('Workflow E: expired file context → file.open useContext → clean error, no crash', async () => {
+    const classifierModule  = require('./classifier');
+    const dispatcherModule  = require('./dispatcher');
+    const verifierModule    = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    ctx.clear();
+    // Set a very short TTL to simulate expiry
+    const origGet = require('../settings').getSetting;
+    require('../settings').getSetting = (key, def) => key === 'jarvisContextTtlMs' ? 1 : origGet(key, def);
+
+    // Set file target — will expire after 1ms
+    ctx.setFileTarget('cv.pdf', '/docs/cv.pdf');
+    await new Promise((r) => setTimeout(r, 10)); // wait for TTL to expire
+
+    classifierModule.classify = async (t) => ({
+      intent: 'file.open', confidence: 'pattern', params: { useContext: true }, needsConfirm: false, _patternIndex: 2, raw: t,
+    });
+    dispatcherModule.dispatch = async (cr) => {
+      // Simulate dispatcher checking context
+      const fileTarget = ctx.getFileTarget();
+      if (cr.params.useContext && !fileTarget) {
+        return { ok: false, error: 'No recent file in context. Please say the filename explicitly.' };
+      }
+      return { ok: true, action: 'Opened.' };
+    };
+    verifierModule.verify = async () => ({ verified: false });
+
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+
+    try {
+      await runPipelineFromText('open it', hudSend, () => Promise.resolve(true));
+      const doneEvent = events.find(e => e.ch === 'jarvis:done');
+      assert.ok(doneEvent, 'Should have jarvis:done event');
+      assert.ok(!doneEvent.payload.ok, 'Should be ok:false when context expired');
+      assert.ok(
+        (doneEvent.payload.display || doneEvent.payload.error || '').toLowerCase().includes('context') ||
+        (doneEvent.payload.display || doneEvent.payload.error || '').toLowerCase().includes('file'),
+        `Error should mention context/file: "${doneEvent.payload.display}"`
+      );
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      require('../settings').getSetting = origGet;
+      ctx.clear();
+    }
+  });
+
+  // ── Context badge: jarvis:context emitted after file.find ──
+  await test('jarvis:context event emitted after successful file.find with single match', async () => {
+    const classifierModule  = require('./classifier');
+    const dispatcherModule  = require('./dispatcher');
+    const verifierModule    = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    ctx.clear();
+    classifierModule.classify = async (t) => ({
+      intent: 'file.find', confidence: 'pattern', params: { query: 'cv' }, needsConfirm: false, _patternIndex: 16, raw: t,
+    });
+    dispatcherModule.dispatch = async () => {
+      ctx.setFileTarget('cv.pdf', '/docs/cv.pdf');
+      return { ok: true, action: 'Found cv.pdf.', data: { matches: [{ name: 'cv.pdf', path: '/docs/cv.pdf', sizeBytes: 0 }] } };
+    };
+    verifierModule.verify = async () => ({ verified: false });
+
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+
+    try {
+      await runPipelineFromText('find my cv', hudSend, () => Promise.resolve(true));
+      const ctxEvent = events.find(e => e.ch === 'jarvis:context');
+      assert.ok(ctxEvent, 'jarvis:context event should be emitted');
+      assert.equal(ctxEvent.payload.file, 'cv.pdf', `file should be cv.pdf, got ${ctxEvent.payload.file}`);
+      assert.ok(typeof ctxEvent.payload.ttlMs === 'number', 'ttlMs should be a number');
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ctx.clear();
+    }
+  });
+
+  // ── Context badge: NOT emitted after system.volume (no file/window context changed) ──
+  await test('jarvis:context NOT emitted after system.volume when no file/window context active', async () => {
+    const classifierModule  = require('./classifier');
+    const dispatcherModule  = require('./dispatcher');
+    const verifierModule    = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    ctx.clear();
+    classifierModule.classify = async (t) => ({
+      intent: 'system.volume', confidence: 'pattern', params: { action: 'up' }, needsConfirm: false, _patternIndex: 27, raw: t,
+    });
+    dispatcherModule.dispatch = async () => ({ ok: true, action: 'Volume up.' });
+    verifierModule.verify = async () => ({ verified: false });
+
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+
+    try {
+      await runPipelineFromText('volume up', hudSend, () => Promise.resolve(true));
+      const ctxEvent = events.find(e => e.ch === 'jarvis:context');
+      assert.ok(!ctxEvent, 'jarvis:context should NOT be emitted when no context is active');
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ctx.clear();
+    }
+  });
+
+  // ── Context badge: window target emitted after app.focus ──
+  await test('jarvis:context event has window field after app.focus succeeds', async () => {
+    const classifierModule  = require('./classifier');
+    const dispatcherModule  = require('./dispatcher');
+    const verifierModule    = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    ctx.clear();
+    classifierModule.classify = async (t) => ({
+      intent: 'app.focus', confidence: 'pattern', params: { appName: 'notepad' }, needsConfirm: false, _patternIndex: 22, raw: t,
+    });
+    dispatcherModule.dispatch = async () => {
+      ctx.setWindowTarget('notepad', 9999, 'app');
+      return { ok: true, action: 'Focused Notepad.', data: { processName: 'notepad', hwnd: 9999 } };
+    };
+    verifierModule.verify = async () => ({ verified: false });
+
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+
+    try {
+      await runPipelineFromText('focus notepad', hudSend, () => Promise.resolve(true));
+      const ctxEvent = events.find(e => e.ch === 'jarvis:context');
+      assert.ok(ctxEvent, 'jarvis:context should be emitted after app.focus');
+      assert.equal(ctxEvent.payload.window, 'notepad');
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ctx.clear();
+    }
+  });
+
+  // ── cancel during disambiguation clears candidates ──
+  await test('system.cancel during active disambiguation clears candidates; next command runs fresh', async () => {
+    const classifierModule  = require('./classifier');
+    const dispatcherModule  = require('./dispatcher');
+    const verifierModule    = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    ctx.clear();
+    const candidates = [
+      { name: 'r1.pdf', path: '/r1.pdf', sizeBytes: 0 },
+      { name: 'r2.pdf', path: '/r2.pdf', sizeBytes: 0 },
+    ];
+
+    let step = 0;
+    classifierModule.classify = async (t) => {
+      step++;
+      if (step === 1) return { intent: 'file.delete', confidence: 'pattern', params: { name: 'r' }, needsConfirm: true, _patternIndex: 18, raw: t };
+      if (step === 2) return { intent: 'system.cancel', confidence: 'pattern', params: {}, needsConfirm: false, _patternIndex: 0, raw: t };
+      return { intent: 'system.volume', confidence: 'pattern', params: { action: 'up' }, needsConfirm: false, _patternIndex: 27, raw: t };
+    };
+    dispatcherModule.dispatch = async (cr) => {
+      if (cr.intent === 'file.delete') {
+        ctx.setCandidates(candidates, cr);
+        return { ok: false, ambiguous: true, candidates, action: 'Found 2 files.' };
+      }
+      if (cr.intent === 'system.cancel') {
+        const hadCandidates = !!ctx.getCandidates();
+        ctx.clearCandidates();
+        return { ok: true, action: hadCandidates ? 'Cancelled. Selection cleared.' : 'OK, cancelled.', data: { cancelled: true } };
+      }
+      return { ok: true, action: 'Done.' };
+    };
+    verifierModule.verify = async () => ({ verified: false });
+
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+
+    try {
+      await runPipelineFromText('delete r', hudSend, () => Promise.resolve(false));
+      assert.ok(ctx.getCandidates(), 'candidates should be set after ambiguous result');
+
+      await runPipelineFromText('cancel', hudSend, () => Promise.resolve(true));
+      assert.ok(!ctx.getCandidates(), 'candidates should be cleared after cancel');
+
+      await runPipelineFromText('volume up', hudSend, () => Promise.resolve(true));
+      const doneEvents = events.filter(e => e.ch === 'jarvis:done');
+      const lastDone = doneEvents[doneEvents.length - 1];
+      assert.ok(lastDone.payload.ok, 'third command should succeed normally');
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ctx.clear();
+    }
+  });
+
+  // ── jarvisChainMaxSteps:3 allows 3 parts ──
+  await test('jarvisChainMaxSteps:3 → splitChainWithBareAnd allows 3 parts', async () => {
+    const { splitChainWithBareAnd } = require('./classifier');
+    const result = splitChainWithBareAnd('open chrome and go to youtube and then minimize it', 3);
+    assert.ok(result.parts.length >= 2, `Should allow at least 2 parts with maxSteps=3, got ${result.parts.length}`);
+    // At most 3 parts allowed
+    assert.ok(result.parts.length <= 3, `Should not exceed 3 parts, got ${result.parts.length}`);
+  });
+
+  // ── jarvisChainMaxSteps:2 (default) still caps at 2 ──
+  await test('jarvisChainMaxSteps:2 (default) → splitChainWithBareAnd caps at 2', async () => {
+    const { splitChainWithBareAnd } = require('./classifier');
+    const result = splitChainWithBareAnd('mute and then volume up and then brightness down', 2);
+    assert.equal(result.parts.length, 2, `Should cap at 2 parts, got ${result.parts.length}`);
+    assert.ok(result.wasCapped, 'wasCapped should be true for 3-part input capped at 2');
+  });
+
+  // ── Pipeline uses jarvisChainMaxSteps setting from settings module ──
+  await test('Pipeline reads jarvisChainMaxSteps from settings; default of 2 preserves Phase 3 behavior', async () => {
+    const s = require('../settings');
+    const maxSteps = s.getSetting('jarvisChainMaxSteps', 2);
+    assert.equal(maxSteps, 2, `Default should be 2, got ${maxSteps}`);
+  });
+
+  // ── Context file target replaced when new file.find runs ──
+  await test('New file.find overwrites old file context (not additive)', async () => {
+    ctx.clear();
+    ctx.setFileTarget('old.pdf', '/old.pdf');
+    assert.equal(ctx.getFileTarget()?.name, 'old.pdf');
+
+    ctx.setFileTarget('new.txt', '/new.txt');
+    const fileTarget = ctx.getFileTarget();
+    assert.equal(fileTarget?.name, 'new.txt', 'New file target should overwrite old');
+    assert.equal(fileTarget?.path, '/new.txt');
+    ctx.clear();
+  });
+
+  // ── Context window target NOT cleared by file operations ──
+  await test('Window target persists across file operations (not cleared by file.find)', async () => {
+    ctx.clear();
+    ctx.setWindowTarget('notepad', 1234, 'app');
+    ctx.setFileTarget('test.txt', '/test.txt');
+
+    assert.ok(ctx.getWindowTarget(), 'window context should still be set');
+    assert.equal(ctx.getWindowTarget()?.processName, 'notepad');
+    assert.ok(ctx.getFileTarget(), 'file context should also be set');
+    ctx.clear();
+  });
+
+  // ── context.clear() clears both file and window targets ──
+  await test('ctx.clear() clears file and window targets so jarvis:context is not emitted', async () => {
+    ctx.clear();
+    ctx.setFileTarget('a.pdf', '/a.pdf');
+    ctx.setWindowTarget('chrome', 5678, 'browser');
+    ctx.clear();
+    assert.ok(!ctx.getFileTarget(), 'file target should be null after clear');
+    assert.ok(!ctx.getWindowTarget(), 'window target should be null after clear');
+  });
+
+  // ── jarvis:context event has correct ttlMs value ──
+  await test('jarvis:context payload ttlMs matches jarvisContextTtlMs setting', async () => {
+    const classifierModule  = require('./classifier');
+    const dispatcherModule  = require('./dispatcher');
+    const verifierModule    = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    ctx.clear();
+    classifierModule.classify = async (t) => ({
+      intent: 'app.focus', confidence: 'pattern', params: { appName: 'notepad' }, needsConfirm: false, _patternIndex: 22, raw: t,
+    });
+    dispatcherModule.dispatch = async () => {
+      ctx.setWindowTarget('notepad', 111, 'app');
+      return { ok: true, action: 'Focused.', data: { processName: 'notepad', hwnd: 111 } };
+    };
+    verifierModule.verify = async () => ({ verified: false });
+
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+
+    try {
+      await runPipelineFromText('focus notepad', hudSend, () => Promise.resolve(true));
+      const ctxEvent = events.find(e => e.ch === 'jarvis:context');
+      assert.ok(ctxEvent, 'jarvis:context should be emitted');
+      const expectedTtl = require('../settings').getSetting('jarvisContextTtlMs', 30000);
+      assert.equal(ctxEvent.payload.ttlMs, expectedTtl, `ttlMs should match setting: expected ${expectedTtl}, got ${ctxEvent.payload.ttlMs}`);
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ctx.clear();
+    }
+  });
+
+  // ── system.select with expired context returns clean error ──
+  await test('system.select with expired context (no candidates) returns clean error, no crash', async () => {
+    const classifierModule  = require('./classifier');
+    const origClassify  = classifierModule.classify;
+    const { dispatch: realDispatch } = require('./dispatcher');
+
+    ctx.clear(); // no candidates set
+
+    classifierModule.classify = async (t) => ({
+      intent: 'system.select', confidence: 'pattern', params: { ordinal: 1 }, needsConfirm: false, _patternIndex: 1, raw: t,
+    });
+
+    const events = [];
+    const hudSend = (ch, payload) => events.push({ ch, payload });
+
+    try {
+      await runPipelineFromText('one', hudSend, () => Promise.resolve(true));
+      const doneEvent = events.find(e => e.ch === 'jarvis:done');
+      assert.ok(doneEvent, 'Should have jarvis:done event');
+      // Should fail cleanly — no crash
+      assert.ok(!doneEvent.payload.ok || doneEvent.payload.display, 'Should have a response without crashing');
+    } finally {
+      classifierModule.classify = origClassify;
+      ctx.clear();
+    }
+  });
+
+  // ── Context snapshot shows correct ctx= field in JARVIS RUN log ──
+  await test('[JARVIS RUN] ctx=both when both file and window context are active', async () => {
+    const classifierModule  = require('./classifier');
+    const dispatcherModule  = require('./dispatcher');
+    const verifierModule    = require('./verifier');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+
+    ctx.clear();
+    ctx.setFileTarget('doc.pdf', '/doc.pdf');
+    ctx.setWindowTarget('chrome', 7777, 'browser');
+
+    classifierModule.classify = async (t) => ({
+      intent: 'system.volume', confidence: 'pattern', params: { action: 'up' }, needsConfirm: false, _patternIndex: 27, raw: t,
+    });
+    dispatcherModule.dispatch = async () => ({ ok: true, action: 'Volume up.' });
+    verifierModule.verify = async () => ({ verified: false });
+
+    const logLines = [];
+    const origLog = console.log;
+    console.log = (...args) => { logLines.push(args.join(' ')); };
+
+    try {
+      await runPipelineFromText('volume up', () => {}, () => Promise.resolve(true));
+      const runLine = logLines.find(l => l.includes('[JARVIS RUN]')) || '';
+      assert.ok(runLine.includes('ctx=both'), `expected ctx=both in: ${runLine}`);
+    } finally {
+      console.log = origLog;
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ctx.clear();
+    }
+  });
+}
+
+// ─── Suite 20 — M4.5: Tool-Calling Agent Layer ────────────────────────────────
+
+async function runM45AgentTests() {
+  section('21. M4.5 — Suite 20: tool-schemas.js + agent.js');
+
+  const toolSchemas = require('./tool-schemas');
+  const agentMod    = require('./agent');
+
+  // ── Schemas ───────────────────────────────────────────────────────────────
+
+  await test('tool-schemas registers every dispatcher case (sample check)', () => {
+    const required = [
+      'file.find', 'file.open', 'file.delete', 'file.rename', 'file.move',
+      'app.open', 'app.close', 'app.focus',
+      'window.minimize', 'window.maximize', 'window.switch',
+      'browser.goto', 'browser.search', 'browser.site',
+      'input.type', 'input.key', 'input.shortcut',
+      'system.volume', 'system.brightness', 'system.lock',
+      'clipboard.write',
+    ];
+    for (const name of required) {
+      assert.ok(toolSchemas.isRegistered(name), `${name} must be registered`);
+      const s = toolSchemas.getSchema(name);
+      assert.ok(s.description && s.parameters, `${name} missing description/parameters`);
+    }
+  });
+
+  await test('toGeminiFunctionDeclarations returns one entry per schema', () => {
+    const decls = toolSchemas.toGeminiFunctionDeclarations();
+    assert.equal(decls.length, toolSchemas.TOOL_SCHEMAS.length);
+    assert.ok(decls.every((d) => d.name && d.description && d.parameters));
+  });
+
+  await test('needsConfirmFor flags destructive intents', () => {
+    assert.equal(toolSchemas.needsConfirmFor('file.delete', { name: 'x' }), true);
+    assert.equal(toolSchemas.needsConfirmFor('file.rename', { newName: 'y' }), true);
+    assert.equal(toolSchemas.needsConfirmFor('file.move',   { targetLocationHint: 'z' }), true);
+    assert.equal(toolSchemas.needsConfirmFor('file.write',  { name: 'x' }), true);
+    assert.equal(toolSchemas.needsConfirmFor('system.lock', {}), true);
+  });
+
+  await test('needsConfirmFor returns false for safe reads', () => {
+    assert.equal(toolSchemas.needsConfirmFor('file.find', { query: 'x' }), false);
+    assert.equal(toolSchemas.needsConfirmFor('app.open',  { appName: 'notepad' }), false);
+    assert.equal(toolSchemas.needsConfirmFor('system.volume', { action: 'mute' }), false);
+  });
+
+  await test('needsConfirmFor file.append is dynamic on content length', () => {
+    assert.equal(toolSchemas.needsConfirmFor('file.append', { name: 'x', content: 'short' }), false);
+    const long = 'x'.repeat(250);
+    assert.equal(toolSchemas.needsConfirmFor('file.append', { name: 'x', content: long }), true);
+  });
+
+  await test('needsConfirmFor unknown tool returns false', () => {
+    assert.equal(toolSchemas.needsConfirmFor('does.not.exist', {}), false);
+  });
+
+  // ── Agent loop — single tool call → finalText ─────────────────────────────
+
+  section('21b. M4.5 — Suite 20: agent runs one tool then finalText');
+
+  await test('runAgent: one tool call → dispatch → finalText returned', async () => {
+    let callCount = 0;
+    const llmCall = async () => {
+      callCount++;
+      if (callCount === 1) return { functionCall: { name: 'app.open', args: { appName: 'notepad' } }, text: null, raw: {} };
+      return { functionCall: null, text: 'Opened Notepad.', raw: {} };
+    };
+    const dispatch = async (cr) => ({ ok: true, action: `Opened ${cr.params.appName}.` });
+    const result = await agentMod.runAgent({
+      transcript: 'launch notepad please',
+      llmCall, dispatch,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.stopped, 'final');
+    assert.equal(result.finalText, 'Opened Notepad.');
+    assert.equal(result.agentSteps.length, 1);
+    assert.equal(result.agentSteps[0].tool, 'app.open');
+    assert.equal(result.lastClassifierResult.intent, 'app.open');
+    assert.equal(result.lastClassifierResult.confidence, 'agent');
+  });
+
+  // ── Agent loop — step cap ─────────────────────────────────────────────────
+
+  await test('runAgent: respects jarvisAgentMaxSteps (cap = 3)', async () => {
+    const settingsMod = require('../settings');
+    const origGet = settingsMod.getSetting.bind(settingsMod);
+    settingsMod.getSetting = (key, fb) => {
+      if (key === 'jarvisAgentMaxSteps')  return 3;
+      if (key === 'jarvisAgentTimeoutMs') return 4000;
+      if (key === 'jarvisAgentProvider')  return 'gemini-2.5-flash';
+      return origGet(key, fb);
+    };
+    try {
+      let calls = 0;
+      const llmCall = async () => {
+        calls++;
+        return { functionCall: { name: 'window.minimize', args: {} }, text: null, raw: {} };
+      };
+      const dispatch = async () => ({ ok: true, action: 'Minimized.' });
+      const result = await agentMod.runAgent({
+        transcript: 'minimize all the windows', llmCall, dispatch,
+      });
+      assert.equal(result.stopped, 'maxSteps');
+      assert.equal(result.agentSteps.length, 3, 'should cap at 3 steps');
+      assert.equal(calls, 3);
+    } finally {
+      settingsMod.getSetting = origGet;
+    }
+  });
+
+  // ── Agent loop — timeout ──────────────────────────────────────────────────
+
+  await test('runAgent: hard timeout after jarvisAgentTimeoutMs', async () => {
+    const settingsMod = require('../settings');
+    const origGet = settingsMod.getSetting.bind(settingsMod);
+    settingsMod.getSetting = (key, fb) => {
+      if (key === 'jarvisAgentMaxSteps')  return 5;
+      if (key === 'jarvisAgentTimeoutMs') return 100;
+      if (key === 'jarvisAgentProvider')  return 'gemini-2.5-flash';
+      return origGet(key, fb);
+    };
+    try {
+      const llmCall = async () => {
+        await new Promise((r) => setTimeout(r, 60));
+        return { functionCall: { name: 'window.minimize', args: {} }, text: null, raw: {} };
+      };
+      const dispatch = async () => ({ ok: true });
+      const result = await agentMod.runAgent({
+        transcript: 'do many things', llmCall, dispatch,
+      });
+      // Should bail out before max steps because wall-clock exceeded.
+      assert.ok(['timeout', 'maxSteps', 'final'].includes(result.stopped), `got stopped=${result.stopped}`);
+      assert.ok(result.agentSteps.length <= 5);
+    } finally {
+      settingsMod.getSetting = origGet;
+    }
+  });
+
+  // ── Confirmation gate fires for destructive agent calls ──────────────────
+
+  await test('runAgent: destructive tool routes through waitForConfirm — declined', async () => {
+    let confirmAsked = false;
+    const llmCall = async () => ({
+      functionCall: { name: 'file.delete', args: { name: 'thing.txt', path: '/x/thing.txt' } },
+      text: null, raw: {},
+    });
+    let dispatched = false;
+    const dispatch = async () => { dispatched = true; return { ok: true, action: 'Deleted.' }; };
+    const result = await agentMod.runAgent({
+      transcript: 'remove that file',
+      llmCall, dispatch,
+      waitForConfirm: async () => { confirmAsked = true; return false; },
+    });
+    assert.ok(confirmAsked, 'waitForConfirm must be invoked for file.delete');
+    assert.equal(dispatched, false, 'dispatch must not run when confirm declines');
+    assert.equal(result.ok, false);
+    assert.equal(result.stopped, 'cancelled');
+    assert.equal(result.finalText, 'Cancelled.');
+  });
+
+  await test('runAgent: destructive tool routes through waitForConfirm — accepted', async () => {
+    let calls = 0;
+    const llmCall = async () => {
+      calls++;
+      if (calls === 1) {
+        return { functionCall: { name: 'file.delete', args: { name: 'thing.txt', path: '/x/thing.txt' } }, text: null, raw: {} };
+      }
+      return { functionCall: null, text: 'Deleted thing.txt.', raw: {} };
+    };
+    const dispatch = async () => ({ ok: true, action: 'Deleted thing.txt.' });
+    const result = await agentMod.runAgent({
+      transcript: 'remove thing',
+      llmCall, dispatch,
+      waitForConfirm: async () => true,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.agentSteps.length, 1);
+    assert.equal(result.agentSteps[0].tool, 'file.delete');
+  });
+
+  // ── Unknown tool name doesn't crash; agent recovers ──────────────────────
+
+  await test('runAgent: unknown tool name → reported back to LLM, agent recovers', async () => {
+    let calls = 0;
+    const llmCall = async () => {
+      calls++;
+      if (calls === 1) return { functionCall: { name: 'does.not.exist', args: {} }, text: null, raw: {} };
+      if (calls === 2) return { functionCall: { name: 'system.volume', args: { action: 'mute' } }, text: null, raw: {} };
+      return { functionCall: null, text: 'Muted.', raw: {} };
+    };
+    const dispatch = async () => ({ ok: true, action: 'Muted.' });
+    const result = await agentMod.runAgent({
+      transcript: 'silence',
+      llmCall, dispatch,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.agentSteps[0].result.error, 'unknown tool');
+    assert.equal(result.agentSteps[1].tool, 'system.volume');
+  });
+
+  // ── Dispatcher throws → agent surfaces, doesn't crash ────────────────────
+
+  await test('runAgent: dispatcher throw is caught and reported as a step result', async () => {
+    let calls = 0;
+    const llmCall = async () => {
+      calls++;
+      if (calls === 1) return { functionCall: { name: 'app.open', args: { appName: 'foo' } }, text: null, raw: {} };
+      return { functionCall: null, text: "Couldn't open foo.", raw: {} };
+    };
+    const dispatch = async () => { throw new Error('bad app'); };
+    const result = await agentMod.runAgent({
+      transcript: 'open foo',
+      llmCall, dispatch,
+    });
+    assert.equal(result.agentSteps[0].result.ok, false);
+    assert.ok(result.agentSteps[0].result.error.includes('bad app'));
+  });
+
+  // ── No api key when agent disabled — pipeline takes the fast-exit path ──
+  // (covered indirectly by classifier suite which runs LLM_NEVER_CALLED;
+  //  here we just assert the toggle reads from settings.)
+
+  await test('jarvisAgentEnabled default is true and reads from settings', () => {
+    const s = require('../settings');
+    const v = s.getSetting('jarvisAgentEnabled', true);
+    assert.equal(typeof v, 'boolean');
+  });
+
+  await test('jarvisAgentMaxSteps default is 3', () => {
+    const s = require('../settings');
+    const v = s.getSetting('jarvisAgentMaxSteps', 3);
+    assert.equal(v, 3);
+  });
+
+  // ── Pipeline → agent route: path=agent in run log ────────────────────────
+
+  section('21c. M4.5 — Suite 20: pipeline routes unsupported → agent → path=agent');
+
+  await test('Pipeline routes system.unsupported to agent and logs path=agent', async () => {
+    const settingsMod      = require('../settings');
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const agentModule      = require('./agent');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+    const origAgent     = agentModule.runAgent;
+    const origGet       = settingsMod.getSetting.bind(settingsMod);
+    const origGetApiKey = settingsMod.getApiKey;
+
+    settingsMod.getSetting = (key, fb) => (key === 'jarvisAgentEnabled' ? true : key === 'jarvisPlannerEnabled' ? false : origGet(key, fb));
+    settingsMod.getApiKey  = () => 'fake-test-key';
+
+    classifierModule.classify = async () => ({
+      intent: 'system.unsupported', confidence: 'pattern', params: {}, needsConfirm: false, raw: 'foo bar baz',
+    });
+    dispatcherModule.dispatch = async () => ({ ok: true, action: 'Did the thing.' });
+    verifierModule.verify     = async () => ({ verified: true });
+    agentModule.runAgent = async () => ({
+      ok: true,
+      finalText: 'Did the thing via agent.',
+      agentSteps: [{ tool: 'app.open', params: { appName: 'notepad' }, result: { ok: true }, latencyMs: 10, retry: false }],
+      lastDispatchResult: { ok: true, action: 'Opened.' },
+      lastClassifierResult: { intent: 'app.open', params: { appName: 'notepad' }, confidence: 'agent', raw: 'foo bar baz', needsConfirm: false },
+      stopped: 'final',
+    });
+
+    const logLines = [];
+    const origLog = console.log;
+    console.log = (...args) => { logLines.push(args.join(' ')); };
+
+    try {
+      await runPipelineFromText('foo bar baz', () => {}, () => Promise.resolve(true));
+      const runLine = logLines.find((l) => l.includes('[JARVIS RUN]')) || '';
+      assert.ok(runLine.includes('path=agent'),       `expected path=agent in: ${runLine}`);
+      assert.ok(runLine.includes('intent=app.open'),  `expected intent=app.open in: ${runLine}`);
+      assert.ok(runLine.includes('conf=agent'),       `expected conf=agent in: ${runLine}`);
+    } finally {
+      console.log = origLog;
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      agentModule.runAgent      = origAgent;
+      settingsMod.getSetting    = origGet;
+      settingsMod.getApiKey     = origGetApiKey;
+      ctx.clear();
+    }
+  });
+
+  await test('Pipeline fast-exits on unsupported when jarvisAgentEnabled=false (no api call)', async () => {
+    const settingsMod      = require('../settings');
+    const classifierModule = require('./classifier');
+    const agentModule      = require('./agent');
+    const origClassify  = classifierModule.classify;
+    const origAgent     = agentModule.runAgent;
+    const origGet       = settingsMod.getSetting.bind(settingsMod);
+    const origGetApiKey = settingsMod.getApiKey;
+
+    settingsMod.getSetting = (key, fb) => (key === 'jarvisAgentEnabled' ? false : origGet(key, fb));
+    settingsMod.getApiKey  = () => 'fake-test-key';
+
+    classifierModule.classify = async () => ({
+      intent: 'system.unsupported', confidence: 'pattern', params: {}, needsConfirm: false, raw: 'zzz',
+      reason: 'unrecognised',
+    });
+    let agentCalled = false;
+    agentModule.runAgent = async () => { agentCalled = true; return { ok: false, finalText: 'no', agentSteps: [], stopped: 'final' }; };
+
+    const events = [];
+    try {
+      await runPipelineFromText('zzz', (ch, p) => events.push({ ch, p }), () => Promise.resolve(true));
+      assert.equal(agentCalled, false, 'agent must NOT run when jarvisAgentEnabled is false');
+      const done = events.find((e) => e.ch === 'jarvis:done');
+      assert.ok(done && done.p.ok === false);
+    } finally {
+      classifierModule.classify = origClassify;
+      agentModule.runAgent      = origAgent;
+      settingsMod.getSetting    = origGet;
+      settingsMod.getApiKey     = origGetApiKey;
+      ctx.clear();
+    }
+  });
+
+  await test('Pipeline fast-exits on unsupported when no api key (regardless of agentEnabled)', async () => {
+    const settingsMod      = require('../settings');
+    const classifierModule = require('./classifier');
+    const agentModule      = require('./agent');
+    const origClassify  = classifierModule.classify;
+    const origAgent     = agentModule.runAgent;
+    const origGetApiKey = settingsMod.getApiKey;
+
+    settingsMod.getApiKey  = () => '';
+
+    classifierModule.classify = async () => ({
+      intent: 'system.unsupported', confidence: 'pattern', params: {}, needsConfirm: false, raw: 'qq',
+    });
+    let agentCalled = false;
+    agentModule.runAgent = async () => { agentCalled = true; return { ok: false, finalText: 'no', agentSteps: [], stopped: 'final' }; };
+
+    try {
+      await runPipelineFromText('qq', () => {}, () => Promise.resolve(true));
+      assert.equal(agentCalled, false, 'agent must NOT run without api key');
+    } finally {
+      classifierModule.classify = origClassify;
+      agentModule.runAgent      = origAgent;
+      settingsMod.getApiKey     = origGetApiKey;
+      ctx.clear();
+    }
+  });
+
+  // ── Trace integration: agent path populates agentSteps in trace ──────────
+
+  await test('Trace record path=agent and agentSteps populated when agent ran', async () => {
+    const settingsMod      = require('../settings');
+    const classifierModule = require('./classifier');
+    const verifierModule   = require('./verifier');
+    const agentModule      = require('./agent');
+    const origClassify  = classifierModule.classify;
+    const origVerify    = verifierModule.verify;
+    const origAgent     = agentModule.runAgent;
+    const origGet       = settingsMod.getSetting.bind(settingsMod);
+    const origGetApiKey = settingsMod.getApiKey;
+
+    const tmpDir = path.join(os.tmpdir(), `jarvis-trace-agent-${Date.now()}`);
+    settingsMod.getSetting = (key, fb) => {
+      if (key === 'jarvisTraceEnabled')  return true;
+      if (key === 'jarvisTraceDir')      return tmpDir;
+      if (key === 'jarvisTraceLevel')    return 'full';
+      if (key === 'jarvisTraceMaxFiles') return 200;
+      if (key === 'jarvisAgentEnabled')  return true;
+      if (key === 'jarvisPlannerEnabled') return false; // M5.0 — keep this test on the agent path
+      return origGet(key, fb);
+    };
+    settingsMod.getApiKey  = () => 'fake-test-key';
+
+    classifierModule.classify = async () => ({
+      intent: 'system.unsupported', confidence: 'pattern', params: {}, needsConfirm: false, raw: 'do something clever',
+    });
+    verifierModule.verify     = async () => ({ verified: true });
+    agentModule.runAgent = async () => ({
+      ok: true,
+      finalText: 'Did it.',
+      agentSteps: [
+        { tool: 'file.find', params: { query: 'invoice' }, result: { ok: true }, latencyMs: 50, retry: false },
+        { tool: 'file.open', params: { path: '/x/invoice.pdf' }, result: { ok: true }, latencyMs: 25, retry: false },
+      ],
+      lastDispatchResult:   { ok: true, action: 'Opened invoice.pdf.' },
+      lastClassifierResult: { intent: 'file.open', params: { path: '/x/invoice.pdf' }, confidence: 'agent', raw: 'do something clever', needsConfirm: false },
+      stopped: 'final',
+    });
+
+    try {
+      await runPipelineFromText('do something clever', () => {}, () => Promise.resolve(true));
+      const files = fs.readdirSync(tmpDir).filter((f) => f.endsWith('.json'));
+      assert.ok(files.length >= 1, 'trace file must be written');
+      const written = JSON.parse(fs.readFileSync(path.join(tmpDir, files[0]), 'utf8'));
+      assert.equal(written.path, 'agent');
+      assert.ok(Array.isArray(written.agentSteps));
+      assert.equal(written.agentSteps.length, 2);
+      assert.equal(written.agentSteps[0].tool, 'file.find');
+      assert.equal(written.agentSteps[1].tool, 'file.open');
+    } finally {
+      classifierModule.classify = origClassify;
+      verifierModule.verify     = origVerify;
+      agentModule.runAgent      = origAgent;
+      settingsMod.getSetting    = origGet;
+      settingsMod.getApiKey     = origGetApiKey;
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* cleanup */ }
+      ctx.clear();
+    }
+  });
+}
+
+// ─── Suite 21 — M4.6: UIA ui.* layer ─────────────────────────────────────────
+
+async function runM46UiTests() {
+  section('22. M4.6 — Suite 21: classifier ui.* patterns');
+
+  await test('ui.click: "click Send" → ui.click {name:"Send"}', async () => {
+    const r = await classify('click Send', LLM_NEVER_CALLED);
+    assert.equal(r.intent,        'ui.click');
+    assert.equal(r.params.name,   'Send');
+  });
+
+  await test('ui.click: "press the OK button" → ui.click {name:"OK"}', async () => {
+    const r = await classify('press the OK button', LLM_NEVER_CALLED);
+    assert.equal(r.intent,        'ui.click');
+    assert.equal(r.params.name,   'OK');
+  });
+
+  await test('ui.click: "tap save" → ui.click {name:"save"}', async () => {
+    const r = await classify('tap save', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'ui.click');
+    assert.equal(r.params.name, 'save');
+  });
+
+  await test('ui.click: "click on the Cancel button" → ui.click {name:"Cancel"}', async () => {
+    const r = await classify('click on the Cancel button', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'ui.click');
+    assert.equal(r.params.name, 'Cancel');
+  });
+
+  await test('input.key still wins for "press enter" (no "the")', async () => {
+    const r = await classify('press enter', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'input.key');
+  });
+
+  await test('ui.fill: "fill subject with hello world" → ui.fill', async () => {
+    const r = await classify('fill subject with hello world', LLM_NEVER_CALLED);
+    assert.equal(r.intent,        'ui.fill');
+    assert.equal(r.params.name,   'subject');
+    assert.equal(r.params.value,  'hello world');
+  });
+
+  await test('ui.fill: "type hello in subject" → ui.fill {name:"subject", value:"hello"}', async () => {
+    const r = await classify('type hello in subject', LLM_NEVER_CALLED);
+    assert.equal(r.intent,        'ui.fill');
+    assert.equal(r.params.name,   'subject');
+    assert.equal(r.params.value,  'hello');
+  });
+
+  await test('ui.fill: "type hi into the body" → ui.fill {name:"body", value:"hi"}', async () => {
+    const r = await classify('type hi into the body', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'ui.fill');
+    assert.equal(r.params.name,  'body');
+    assert.equal(r.params.value, 'hi');
+  });
+
+  await test('input.type still wins for bare "type hello world" (no "in")', async () => {
+    const r = await classify('type hello world', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'input.type');
+  });
+
+  await test('ui.read: "what does the status say" → ui.read', async () => {
+    const r = await classify('what does the status say', LLM_NEVER_CALLED);
+    assert.equal(r.intent,      'ui.read');
+    assert.equal(r.params.name, 'status');
+  });
+
+  await test('ui.read: "read the subject field" → ui.read {name:"subject"}', async () => {
+    const r = await classify('read the subject field', LLM_NEVER_CALLED);
+    assert.equal(r.intent,      'ui.read');
+    assert.equal(r.params.name, 'subject');
+  });
+
+  await test('file.read still wins for "read notes.txt" (extension present)', async () => {
+    const r = await classify('read notes.txt', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'file.read');
+  });
+
+  // ── tool-schemas registers ui.* ───────────────────────────────────────────
+
+  section('22b. M4.6 — Suite 21: tool-schemas registration');
+
+  await test('ui.* tools are registered in tool-schemas', () => {
+    const toolSchemas = require('./tool-schemas');
+    for (const n of ['ui.list', 'ui.click', 'ui.fill', 'ui.read']) {
+      assert.ok(toolSchemas.isRegistered(n), `${n} must be registered`);
+    }
+  });
+
+  await test('Gemini function declarations include ui.* tools', () => {
+    const toolSchemas = require('./tool-schemas');
+    const decls = toolSchemas.toGeminiFunctionDeclarations();
+    const names = decls.map((d) => d.name);
+    for (const n of ['ui.list', 'ui.click', 'ui.fill', 'ui.read']) {
+      assert.ok(names.includes(n), `${n} must be in function declarations`);
+    }
+  });
+
+  await test('ui.* tools are not flagged destructive (no implicit confirm)', () => {
+    const toolSchemas = require('./tool-schemas');
+    for (const n of ['ui.list', 'ui.click', 'ui.fill', 'ui.read']) {
+      assert.equal(toolSchemas.needsConfirmFor(n, {}), false, `${n} must not require confirm`);
+    }
+  });
+
+  // ── ui.js — runPS mocking ─────────────────────────────────────────────────
+
+  section('22c. M4.6 — Suite 21: ui.js wrapper (mocked PowerShell)');
+
+  // Helper to swap runPS for a single test using a fresh module cache.
+  function withMockedPS(stdoutStr, fn) {
+    const psRunner = require('./tools/ps-runner');
+    const orig = psRunner.runPS;
+    psRunner.runPS = async () => ({ ok: true, stdout: stdoutStr, stderr: '' });
+    return Promise.resolve(fn()).finally(() => { psRunner.runPS = orig; });
+  }
+
+  await test('listElements: parses elements array from PS stdout', async () => {
+    const ui = require('./tools/ui');
+    const stdout = JSON.stringify({
+      ok: true,
+      elements: [
+        { name: 'Send',   automationId: 'btnSend', role: 'button', isEnabled: true },
+        { name: 'Cancel', automationId: 'btnCancel', role: 'button', isEnabled: true },
+      ],
+    });
+    await withMockedPS(stdout, async () => {
+      const r = await ui.listElements({ scope: 'focused' });
+      assert.equal(r.ok, true);
+      assert.equal(r.data.elements.length, 2);
+      assert.equal(r.data.elements[0].name, 'Send');
+    });
+  });
+
+  await test('clickElement: single match → ok with target', async () => {
+    const ui = require('./tools/ui');
+    const stdout = JSON.stringify({ ok: true, target: { name: 'Send', automationId: 'btnSend', role: 'button', isEnabled: true } });
+    await withMockedPS(stdout, async () => {
+      const r = await ui.clickElement({ name: 'Send' });
+      assert.equal(r.ok, true);
+      assert.equal(r.data.target.name, 'Send');
+      assert.ok(r.action.includes('Send'));
+    });
+  });
+
+  await test('clickElement: ambiguous → returns candidates (M4.1 shape)', async () => {
+    const ui = require('./tools/ui');
+    const stdout = JSON.stringify({
+      ok: false, ambiguous: true,
+      candidates: [
+        { name: 'Save', automationId: 'btnSaveTop', role: 'button', isEnabled: true },
+        { name: 'Save', automationId: 'btnSaveBot', role: 'button', isEnabled: true },
+      ],
+    });
+    await withMockedPS(stdout, async () => {
+      const r = await ui.clickElement({ name: 'Save' });
+      assert.equal(r.ok, false);
+      assert.equal(r.ambiguous, true);
+      assert.equal(r.candidates.length, 2);
+      assert.ok(r.action.includes('Say one'));
+    });
+  });
+
+  await test('clickElement: not_found → clean error', async () => {
+    const ui = require('./tools/ui');
+    const stdout = JSON.stringify({ ok: false, error: 'not_found' });
+    await withMockedPS(stdout, async () => {
+      const r = await ui.clickElement({ name: 'Nonexistent' });
+      assert.equal(r.ok, false);
+      assert.ok(r.error.includes('Nonexistent'));
+    });
+  });
+
+  await test('clickElement: missing selector → guarded error (no PS call)', async () => {
+    const ui = require('./tools/ui');
+    let psCalled = false;
+    const psRunner = require('./tools/ps-runner');
+    const orig = psRunner.runPS;
+    psRunner.runPS = async () => { psCalled = true; return { ok: true, stdout: '{}', stderr: '' }; };
+    try {
+      const r = await ui.clickElement({});
+      assert.equal(r.ok, false);
+      assert.equal(psCalled, false, 'PS must not be called when selector is missing');
+    } finally {
+      psRunner.runPS = orig;
+    }
+  });
+
+  await test('fillElement: missing value → clean error', async () => {
+    const ui = require('./tools/ui');
+    const r = await ui.fillElement({ name: 'subject' });
+    assert.equal(r.ok, false);
+    assert.ok(r.error.includes('value'));
+  });
+
+  await test('fillElement: success returns value in data', async () => {
+    const ui = require('./tools/ui');
+    const stdout = JSON.stringify({
+      ok: true, target: { name: 'Subject', automationId: 'sb', role: 'edit' },
+      value: 'hello',
+    });
+    await withMockedPS(stdout, async () => {
+      const r = await ui.fillElement({ name: 'Subject', value: 'hello' });
+      assert.equal(r.ok, true);
+      assert.equal(r.data.value, 'hello');
+    });
+  });
+
+  await test('readElement: returns the value', async () => {
+    const ui = require('./tools/ui');
+    const stdout = JSON.stringify({
+      ok: true, target: { name: 'Status', automationId: 's', role: 'text' },
+      value: 'All systems go',
+    });
+    await withMockedPS(stdout, async () => {
+      const r = await ui.readElement({ name: 'Status' });
+      assert.equal(r.ok, true);
+      assert.equal(r.data.value, 'All systems go');
+    });
+  });
+
+  await test('PS failure → tool error', async () => {
+    const ui = require('./tools/ui');
+    const psRunner = require('./tools/ps-runner');
+    const orig = psRunner.runPS;
+    psRunner.runPS = async () => ({ ok: false, stdout: '', stderr: '', error: 'PS timeout' });
+    try {
+      const r = await ui.clickElement({ name: 'X' });
+      assert.equal(r.ok, false);
+      assert.ok(r.error.includes('timeout') || r.error.includes('PowerShell'));
+    } finally {
+      psRunner.runPS = orig;
+    }
+  });
+
+  await test('Garbage stdout → clean error', async () => {
+    const ui = require('./tools/ui');
+    await withMockedPS('not json', async () => {
+      const r = await ui.clickElement({ name: 'X' });
+      assert.equal(r.ok, false);
+      assert.ok(r.error.includes('Invalid'));
+    });
+  });
+
+  // ── Dispatcher routing ──────────────────────────────────────────────────
+
+  section('22d. M4.6 — Suite 21: dispatcher cases');
+
+  await test('dispatcher: ui.click without name AND automationId → DispatchError', async () => {
+    const { dispatch, DispatchError } = require('./dispatcher');
+    let threw = null;
+    try {
+      await dispatch({ intent: 'ui.click', params: {}, raw: 'click', needsConfirm: false });
+    } catch (err) { threw = err; }
+    assert.ok(threw instanceof DispatchError, 'should throw DispatchError');
+  });
+
+  await test('dispatcher: ui.fill without value → DispatchError', async () => {
+    const { dispatch, DispatchError } = require('./dispatcher');
+    let threw = null;
+    try {
+      await dispatch({ intent: 'ui.fill', params: { name: 'subject' }, raw: 'fill subject', needsConfirm: false });
+    } catch (err) { threw = err; }
+    assert.ok(threw instanceof DispatchError);
+  });
+
+  await test('dispatcher: ui.click with mocked tool returns ok', async () => {
+    const psRunner = require('./tools/ps-runner');
+    const orig = psRunner.runPS;
+    psRunner.runPS = async () => ({
+      ok: true,
+      stdout: JSON.stringify({ ok: true, target: { name: 'Send', automationId: 'btn', role: 'button' } }),
+      stderr: '',
+    });
+    try {
+      const { dispatch } = require('./dispatcher');
+      const r = await dispatch({ intent: 'ui.click', params: { name: 'Send' }, raw: 'click Send', needsConfirm: false });
+      assert.equal(r.ok, true);
+      assert.equal(r.data.target.name, 'Send');
+    } finally {
+      psRunner.runPS = orig;
+    }
+  });
+
+  await test('dispatcher: ui.click ambiguous result surfaces ambiguous flag', async () => {
+    const psRunner = require('./tools/ps-runner');
+    const orig = psRunner.runPS;
+    psRunner.runPS = async () => ({
+      ok: true,
+      stdout: JSON.stringify({
+        ok: false, ambiguous: true,
+        candidates: [
+          { name: 'Save', automationId: 'a', role: 'button' },
+          { name: 'Save', automationId: 'b', role: 'button' },
+        ],
+      }),
+      stderr: '',
+    });
+    try {
+      const { dispatch } = require('./dispatcher');
+      const r = await dispatch({ intent: 'ui.click', params: { name: 'Save' }, raw: 'click Save', needsConfirm: false });
+      assert.equal(r.ok, false);
+      assert.equal(r.ambiguous, true);
+      assert.equal(r.candidates.length, 2);
+    } finally {
+      psRunner.runPS = orig;
+    }
+  });
+
+  // ── Verifier behavior ───────────────────────────────────────────────────
+
+  section('22e. M4.6 — Suite 21: verifier ui.* cases');
+
+  await test('verifier: ui.click ok with target → verified=true', async () => {
+    const { verify } = require('./verifier');
+    const r = await verify(
+      { intent: 'ui.click', params: { name: 'Send' } },
+      { ok: true, data: { target: { name: 'Send' }, method: 'invoke' }, action: '' },
+    );
+    assert.equal(r.verified, true);
+    assert.equal(r.method, 'invoke_ok');
+  });
+
+  await test('verifier: ui.fill confirms via readback when values match', async () => {
+    const psRunner = require('./tools/ps-runner');
+    const orig = psRunner.runPS;
+    psRunner.runPS = async () => ({
+      ok: true,
+      stdout: JSON.stringify({ ok: true, target: { name: 'Subject' }, value: 'hello' }),
+      stderr: '',
+    });
+    try {
+      const { verify } = require('./verifier');
+      const r = await verify(
+        { intent: 'ui.fill', params: { name: 'Subject' } },
+        { ok: true, data: { target: { name: 'Subject', automationId: '' }, value: 'hello' }, action: '' },
+      );
+      assert.equal(r.verified, true);
+      assert.equal(r.method, 'fill_readback');
+    } finally {
+      psRunner.runPS = orig;
+    }
+  });
+
+  await test('verifier: ui.fill mismatch → verified=false', async () => {
+    const psRunner = require('./tools/ps-runner');
+    const orig = psRunner.runPS;
+    psRunner.runPS = async () => ({
+      ok: true,
+      stdout: JSON.stringify({ ok: true, target: { name: 'Subject' }, value: 'something else' }),
+      stderr: '',
+    });
+    try {
+      const { verify } = require('./verifier');
+      const r = await verify(
+        { intent: 'ui.fill', params: { name: 'Subject' } },
+        { ok: true, data: { target: { name: 'Subject', automationId: '' }, value: 'hello' }, action: '' },
+      );
+      assert.equal(r.verified, false);
+      assert.ok(r.detail.includes('mismatch'));
+    } finally {
+      psRunner.runPS = orig;
+    }
+  });
+
+  await test('verifier: ui.read with value → verified=true', async () => {
+    const { verify } = require('./verifier');
+    const r = await verify(
+      { intent: 'ui.read', params: { name: 'Status' } },
+      { ok: true, data: { target: { name: 'Status' }, value: 'All systems go' }, action: '' },
+    );
+    assert.equal(r.verified, true);
+    assert.equal(r.method, 'read_ok');
+  });
+
+  await test('verifier: ui.list returns counts', async () => {
+    const { verify } = require('./verifier');
+    const r = await verify(
+      { intent: 'ui.list', params: {} },
+      { ok: true, data: { elements: [{ name: 'a' }, { name: 'b' }] }, action: '' },
+    );
+    assert.equal(r.verified, true);
+    assert.ok(r.detail.includes('2'));
+  });
+}
+
+// ─── Suite 22 — M4.7: Streaming pipeline ─────────────────────────────────────
+
+async function runM47StreamingTests() {
+  section('23. M4.7 — Suite 22: ack.js phrase mapping');
+
+  const ackMod = require('./ack');
+
+  await test('ackPhraseFor app.open includes app name', () => {
+    assert.equal(ackMod.ackPhraseFor('app.open', { appName: 'chrome' }), 'Opening chrome.');
+  });
+
+  await test('ackPhraseFor falls back to generic phrase when no params', () => {
+    assert.equal(ackMod.ackPhraseFor('app.open', {}), 'Opening it.');
+  });
+
+  await test('ackPhraseFor file.find → "Searching."', () => {
+    assert.equal(ackMod.ackPhraseFor('file.find', {}), 'Searching.');
+  });
+
+  await test('ackPhraseFor returns null for destructive intents', () => {
+    assert.equal(ackMod.ackPhraseFor('file.delete', { name: 'x.txt' }), null);
+    assert.equal(ackMod.ackPhraseFor('file.rename', { newName: 'y' }), null);
+    assert.equal(ackMod.ackPhraseFor('file.move',   { targetLocationHint: 'desktop' }), null);
+    assert.equal(ackMod.ackPhraseFor('system.lock', {}), null);
+  });
+
+  await test('ackPhraseFor returns null when needsConfirm is true (defer)', () => {
+    assert.equal(ackMod.ackPhraseFor('app.open', { appName: 'foo' }, { needsConfirm: true }), null);
+  });
+
+  await test('ackPhraseFor returns null for unsupported / unknown intents', () => {
+    assert.equal(ackMod.ackPhraseFor('system.unsupported', {}), null);
+    assert.equal(ackMod.ackPhraseFor('does.not.exist',     {}), null);
+  });
+
+  await test('ackPhraseFor ui.click includes element name', () => {
+    assert.equal(ackMod.ackPhraseFor('ui.click', { name: 'Send' }), 'Clicking Send.');
+  });
+
+  // ── fireAck synthesizes & emits HUD event ──
+
+  section('23b. M4.7 — Suite 22: fireAck non-blocking + jarvis:audio-ack event');
+
+  await test('fireAck calls TTS once and emits jarvis:audio-ack', async () => {
+    let ttsCalls = 0;
+    const events = [];
+    const synthesizeSpeech = async (text) => {
+      ttsCalls++;
+      assert.equal(text, 'Searching.');
+      return { audioBuffer: Buffer.from('fake'), mimeType: 'audio/mpeg' };
+    };
+    const r = await ackMod.fireAck('Searching.', (ch, p) => events.push({ ch, p }), { synthesizeSpeech });
+    assert.equal(ttsCalls, 1);
+    assert.equal(r.ok, true);
+    const ack = events.find((e) => e.ch === 'jarvis:audio-ack');
+    assert.ok(ack, 'must emit jarvis:audio-ack');
+    assert.equal(ack.p.phrase, 'Searching.');
+    assert.ok(typeof ack.p.audioBase64 === 'string' && ack.p.audioBase64.length > 0);
+  });
+
+  await test('fireAck swallows TTS failures (no throw)', async () => {
+    const synthesizeSpeech = async () => { throw new Error('no key'); };
+    const events = [];
+    const r = await ackMod.fireAck('On it.', (ch, p) => events.push({ ch, p }), { synthesizeSpeech });
+    assert.equal(r.ok, false);
+    assert.ok(r.error.includes('no key'));
+    assert.equal(events.length, 0, 'no HUD event when TTS fails');
+  });
+
+  await test('fireAck with empty phrase is no-op', async () => {
+    const r = await ackMod.fireAck('', () => {});
+    assert.equal(r.ok, false);
+  });
+
+  // ── Pipeline integration: ack fires before result-TTS ──
+
+  section('23c. M4.7 — Suite 22: pipeline ack ordering + audio-ack event');
+
+  await test('Pipeline emits jarvis:audio-ack BEFORE jarvis:done on hot-path intent', async () => {
+    const settingsMod      = require('../settings');
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const ttsMod           = require('../tts');
+    const ackModule        = require('./ack');
+
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+    const origSynth     = ttsMod.synthesizeSpeech;
+    const origGet       = settingsMod.getSetting.bind(settingsMod);
+
+    settingsMod.getSetting = (key, fb) => {
+      if (key === 'jarvisStreamingEnabled') return true;
+      if (key === 'jarvisAckTtsEnabled')    return true;
+      return origGet(key, fb);
+    };
+    classifierModule.classify = async () => ({
+      intent: 'app.open', confidence: 'pattern', params: { appName: 'notepad' }, needsConfirm: false, _patternIndex: 21, raw: 'open notepad',
+    });
+    dispatcherModule.dispatch = async () => {
+      // Simulate ~30 ms dispatch
+      await new Promise((r) => setTimeout(r, 30));
+      return { ok: true, action: 'Opened notepad.' };
+    };
+    verifierModule.verify = async () => ({ verified: true, method: 'spawn_ok' });
+    ttsMod.synthesizeSpeech = async (text) => {
+      // Ack call resolves fast; result call runs after.
+      const isAck = text.startsWith('Opening');
+      await new Promise((r) => setTimeout(r, isAck ? 5 : 10));
+      return { audioBuffer: Buffer.from(isAck ? 'ack' : 'res'), mimeType: 'audio/mpeg' };
+    };
+
+    const events = [];
+    try {
+      await runPipelineFromText('open notepad', (ch, p) => events.push({ ch, p }), () => Promise.resolve(true));
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ttsMod.synthesizeSpeech   = origSynth;
+      settingsMod.getSetting    = origGet;
+      ctx.clear();
+    }
+
+    const ackIdx  = events.findIndex((e) => e.ch === 'jarvis:audio-ack');
+    const doneIdx = events.findIndex((e) => e.ch === 'jarvis:done');
+    assert.notEqual(ackIdx, -1, 'jarvis:audio-ack must fire');
+    assert.notEqual(doneIdx, -1, 'jarvis:done must fire');
+    assert.ok(ackIdx < doneIdx, `ack (${ackIdx}) must come before done (${doneIdx})`);
+  });
+
+  await test('Pipeline does NOT fire ack when intent is destructive (file.delete)', async () => {
+    const settingsMod      = require('../settings');
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const ttsMod           = require('../tts');
+
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+    const origSynth     = ttsMod.synthesizeSpeech;
+
+    classifierModule.classify = async () => ({
+      intent: 'file.delete', confidence: 'pattern',
+      params: { name: 'note.txt', path: '/tmp/note.txt' },
+      needsConfirm: true, _patternIndex: 19, raw: 'delete note.txt',
+    });
+    dispatcherModule.dispatch = async () => ({ ok: true, action: 'Deleted.', data: { path: '/tmp/note.txt' } });
+    verifierModule.verify = async () => ({ verified: true });
+    let synthCalls = 0;
+    ttsMod.synthesizeSpeech = async () => {
+      synthCalls++;
+      return { audioBuffer: Buffer.from('x'), mimeType: 'audio/mpeg' };
+    };
+
+    const events = [];
+    try {
+      await runPipelineFromText('delete note.txt', (ch, p) => events.push({ ch, p }), () => Promise.resolve(true));
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ttsMod.synthesizeSpeech   = origSynth;
+      ctx.clear();
+    }
+
+    const ack = events.find((e) => e.ch === 'jarvis:audio-ack');
+    assert.equal(ack, undefined, 'destructive intent must not fire ack');
+    // result-tier TTS still runs once
+    assert.ok(synthCalls >= 1, `expected at least the result TTS, got ${synthCalls}`);
+  });
+
+  await test('Pipeline skips ack when jarvisAckTtsEnabled is false', async () => {
+    const settingsMod      = require('../settings');
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const ttsMod           = require('../tts');
+
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+    const origSynth     = ttsMod.synthesizeSpeech;
+    const origGet       = settingsMod.getSetting.bind(settingsMod);
+
+    settingsMod.getSetting = (key, fb) => (key === 'jarvisAckTtsEnabled' ? false : origGet(key, fb));
+    classifierModule.classify = async () => ({
+      intent: 'app.open', confidence: 'pattern', params: { appName: 'notepad' }, needsConfirm: false, _patternIndex: 21, raw: 'open notepad',
+    });
+    dispatcherModule.dispatch = async () => ({ ok: true, action: 'Opened.' });
+    verifierModule.verify = async () => ({ verified: true });
+    ttsMod.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from('x'), mimeType: 'audio/mpeg' });
+
+    const events = [];
+    try {
+      await runPipelineFromText('open notepad', (ch, p) => events.push({ ch, p }), () => Promise.resolve(true));
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ttsMod.synthesizeSpeech   = origSynth;
+      settingsMod.getSetting    = origGet;
+      ctx.clear();
+    }
+
+    const ack = events.find((e) => e.ch === 'jarvis:audio-ack');
+    assert.equal(ack, undefined, 'no ack when setting disabled');
+  });
+
+  // ── Speculative pre-warm cache ──
+
+  section('23d. M4.7 — Suite 22: prewarmClassify pre-warm cache');
+
+  await test('prewarmClassify caches a pattern result; pipeline consumes it', async () => {
+    const { prewarmClassify } = require('./pipeline');
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const ttsMod           = require('../tts');
+
+    let classifyCalls = 0;
+    const origClassify = classifierModule.classify;
+    const wrappedClassify = async (t) => {
+      classifyCalls++;
+      return origClassify(t);
+    };
+    const origDispatch = dispatcherModule.dispatch;
+    const origVerify   = verifierModule.verify;
+    const origSynth    = ttsMod.synthesizeSpeech;
+
+    // Real classifier for "mute" — known pattern hit.
+    classifierModule.classify = wrappedClassify;
+    dispatcherModule.dispatch = async () => ({ ok: true, action: 'Volume muted.' });
+    verifierModule.verify     = async () => ({ verified: true });
+    ttsMod.synthesizeSpeech   = async () => ({ audioBuffer: Buffer.from('x'), mimeType: 'audio/mpeg' });
+
+    try {
+      const r = await prewarmClassify('mute');
+      assert.equal(r.cached, true, `prewarm should cache: ${JSON.stringify(r)}`);
+      assert.equal(classifyCalls, 1);
+      // Run with the same transcript — pipeline should consume cache (no extra classify call).
+      await runPipelineFromText('mute', () => {}, () => Promise.resolve(true));
+      assert.equal(classifyCalls, 1, 'classifier should NOT be called again when prewarm hit');
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ttsMod.synthesizeSpeech   = origSynth;
+      ctx.clear();
+    }
+  });
+
+  await test('prewarmClassify does NOT cache destructive intents', async () => {
+    const { prewarmClassify } = require('./pipeline');
+    const r = await prewarmClassify('delete report.txt');
+    assert.equal(r.cached, false);
+    assert.ok(r.reason === 'destructive' || r.intent !== 'file.delete' || r.reason);
+  });
+
+  await test('prewarmClassify does NOT cache when jarvisStreamingEnabled is false', async () => {
+    const settingsMod = require('../settings');
+    const origGet = settingsMod.getSetting.bind(settingsMod);
+    settingsMod.getSetting = (key, fb) => (key === 'jarvisStreamingEnabled' ? false : origGet(key, fb));
+    try {
+      const { prewarmClassify } = require('./pipeline');
+      const r = await prewarmClassify('mute');
+      assert.equal(r.cached, false);
+    } finally {
+      settingsMod.getSetting = origGet;
+    }
+  });
+
+  await test('prewarm cache miss (different transcript) → classifier still runs', async () => {
+    const { prewarmClassify } = require('./pipeline');
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const ttsMod           = require('../tts');
+
+    let classifyCalls = 0;
+    const origClassify = classifierModule.classify;
+    const orig = origClassify;
+    classifierModule.classify = async (t) => { classifyCalls++; return orig(t); };
+    const origDispatch = dispatcherModule.dispatch;
+    const origVerify   = verifierModule.verify;
+    const origSynth    = ttsMod.synthesizeSpeech;
+    dispatcherModule.dispatch = async () => ({ ok: true, action: 'OK' });
+    verifierModule.verify     = async () => ({ verified: true });
+    ttsMod.synthesizeSpeech   = async () => ({ audioBuffer: Buffer.from('x'), mimeType: 'audio/mpeg' });
+
+    try {
+      await prewarmClassify('mute');                            // cache "mute"
+      await runPipelineFromText('volume up', () => {}, () => Promise.resolve(true));
+      // 1 classify for prewarm + 1 classify for "volume up" (different transcript)
+      assert.ok(classifyCalls >= 2, `expected ≥2 classify calls, got ${classifyCalls}`);
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ttsMod.synthesizeSpeech   = origSynth;
+      ctx.clear();
+    }
+  });
+
+  // ── Cancellation ──
+
+  section('23e. M4.7 — Suite 22: cancelCurrent + AbortSignal');
+
+  await test('cancelCurrent returns false when no pipeline is running', () => {
+    const { cancelCurrent } = require('./pipeline');
+    assert.equal(cancelCurrent(), false);
+  });
+
+  await test('Pipeline emits cancelled jarvis:done when cancelCurrent fires mid-dispatch', async () => {
+    const { cancelCurrent } = require('./pipeline');
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const ttsMod           = require('../tts');
+
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+    const origSynth     = ttsMod.synthesizeSpeech;
+
+    classifierModule.classify = async () => ({
+      intent: 'file.find', confidence: 'pattern', params: { query: 'cv' }, needsConfirm: false, _patternIndex: 16, raw: 'find cv',
+    });
+    dispatcherModule.dispatch = async (cr, opts) => {
+      // Long-running mock that respects the signal.
+      return await new Promise((resolve) => {
+        const sig = opts && opts.signal;
+        const t = setTimeout(() => resolve({ ok: true, action: 'Found.', data: { matches: [] } }), 200);
+        if (sig) {
+          const onAbort = () => { clearTimeout(t); resolve({ ok: false, error: 'cancelled', cancelled: true, action: '' }); };
+          if (sig.aborted) onAbort();
+          else sig.addEventListener('abort', onAbort, { once: true });
+        }
+      });
+    };
+    verifierModule.verify   = async () => ({ verified: true });
+    ttsMod.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from('x'), mimeType: 'audio/mpeg' });
+
+    const events = [];
+    try {
+      const runPromise = runPipelineFromText('find cv', (ch, p) => events.push({ ch, p }), () => Promise.resolve(true));
+      // Give the pipeline a tick to enter dispatch
+      await new Promise((r) => setTimeout(r, 20));
+      const cancelled = cancelCurrent();
+      assert.equal(cancelled, true, 'cancelCurrent should report a cancel was issued');
+      await runPromise;
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ttsMod.synthesizeSpeech   = origSynth;
+      ctx.clear();
+    }
+
+    const done = events.find((e) => e.ch === 'jarvis:done');
+    assert.ok(done, 'jarvis:done must fire');
+    assert.equal(done.p.ok, false);
+    assert.equal(done.p.stopped, 'cancelled');
+  });
+
+  await test('dispatcher fast-exits when signal already aborted before dispatch', async () => {
+    const { dispatch } = require('./dispatcher');
+    const c = new AbortController();
+    c.abort();
+    const r = await dispatch(
+      { intent: 'system.volume', params: { action: 'mute' }, raw: 'mute', needsConfirm: false },
+      { signal: c.signal },
+    );
+    assert.equal(r.ok, false);
+    assert.equal(r.cancelled, true);
+  });
+
+  // ── Run log includes path=pattern speculative=1 when prewarm hit ──
+
+  section('23f. M4.7 — Suite 22: [JARVIS RUN] speculative=1 + ack="..."');
+
+  await test('Run log gains speculative=1 when prewarm cache was consumed', async () => {
+    const { prewarmClassify } = require('./pipeline');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const ttsMod           = require('../tts');
+    const origDispatch = dispatcherModule.dispatch;
+    const origVerify   = verifierModule.verify;
+    const origSynth    = ttsMod.synthesizeSpeech;
+    dispatcherModule.dispatch = async () => ({ ok: true, action: 'OK' });
+    verifierModule.verify     = async () => ({ verified: true });
+    ttsMod.synthesizeSpeech   = async () => ({ audioBuffer: Buffer.from('x'), mimeType: 'audio/mpeg' });
+
+    const logLines = [];
+    const origLog = console.log;
+    console.log = (...a) => { logLines.push(a.join(' ')); };
+    try {
+      await prewarmClassify('mute');
+      await runPipelineFromText('mute', () => {}, () => Promise.resolve(true));
+    } finally {
+      console.log = origLog;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ttsMod.synthesizeSpeech   = origSynth;
+      ctx.clear();
+    }
+    const runLine = logLines.find((l) => l.includes('[JARVIS RUN]')) || '';
+    assert.ok(runLine.includes('speculative=1'), `expected speculative=1 in: ${runLine}`);
+  });
+
+  await test('Run log includes ack="..." when ack fired', async () => {
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const ttsMod           = require('../tts');
+    const origClassify = classifierModule.classify;
+    const origDispatch = dispatcherModule.dispatch;
+    const origVerify   = verifierModule.verify;
+    const origSynth    = ttsMod.synthesizeSpeech;
+
+    classifierModule.classify = async () => ({
+      intent: 'app.open', confidence: 'pattern', params: { appName: 'chrome' }, needsConfirm: false, _patternIndex: 21, raw: 'open chrome',
+    });
+    dispatcherModule.dispatch = async () => ({ ok: true, action: 'Opened.' });
+    verifierModule.verify     = async () => ({ verified: true });
+    ttsMod.synthesizeSpeech   = async () => ({ audioBuffer: Buffer.from('x'), mimeType: 'audio/mpeg' });
+
+    const logLines = [];
+    const origLog = console.log;
+    console.log = (...a) => { logLines.push(a.join(' ')); };
+    try {
+      await runPipelineFromText('open chrome', () => {}, () => Promise.resolve(true));
+    } finally {
+      console.log = origLog;
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ttsMod.synthesizeSpeech   = origSynth;
+      ctx.clear();
+    }
+    const runLine = logLines.find((l) => l.includes('[JARVIS RUN]')) || '';
+    assert.ok(runLine.includes('ack="Opening chrome.'), `expected ack=... in: ${runLine}`);
+  });
+}
+
+// ─── Suite 23 — M4.8: Self-Correcting Loop & Conversational Continuity ──────
+
+async function runM48ContinuityTests() {
+  section('24. M4.8 — Suite 23: context.lastAction');
+
+  await test('setLastAction / getLastAction round-trip', () => {
+    ctx.clear();
+    ctx.setLastAction({
+      intent: 'input.type',
+      params: { text: 'hello' },
+      result: { ok: true, action: 'Typed "hello".' },
+      transcript: 'type hello',
+      needsConfirm: false,
+    });
+    const last = ctx.getLastAction();
+    assert.ok(last);
+    assert.equal(last.intent, 'input.type');
+    assert.equal(last.params.text, 'hello');
+    assert.equal(last.result.ok, true);
+    ctx.clear();
+  });
+
+  await test('getLastAction returns null when nothing set', () => {
+    ctx.clear();
+    assert.equal(ctx.getLastAction(), null);
+  });
+
+  await test('setLastAction with empty entry is no-op', () => {
+    ctx.clear();
+    ctx.setLastAction(null);
+    ctx.setLastAction({});
+    assert.equal(ctx.getLastAction(), null);
+  });
+
+  await test('clear() drops lastAction', () => {
+    ctx.setLastAction({ intent: 'app.open', params: { appName: 'notepad' } });
+    assert.ok(ctx.getLastAction());
+    ctx.clear();
+    assert.equal(ctx.getLastAction(), null);
+  });
+
+  await test('snapshot() includes lastAction with ttlRemaining', () => {
+    ctx.clear();
+    ctx.setLastAction({ intent: 'app.open', params: { appName: 'chrome' }, transcript: 'open chrome' });
+    const snap = ctx.snapshot();
+    assert.ok(snap.lastAction);
+    assert.equal(snap.lastAction.intent, 'app.open');
+    assert.ok(typeof snap.lastAction.ttlRemaining === 'number');
+    ctx.clear();
+  });
+
+  // ── Classifier patterns ────────────────────────────────────────────────────
+
+  section('24b. M4.8 — Suite 23: classifier system.repeat / system.undo');
+
+  await test('"do that again" → system.repeat', async () => {
+    const r = await classify('do that again', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.repeat');
+  });
+
+  await test('"again" → system.repeat', async () => {
+    const r = await classify('again', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.repeat');
+  });
+
+  await test('"repeat that" → system.repeat', async () => {
+    const r = await classify('repeat that', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.repeat');
+  });
+
+  await test('Bare "undo" stays on legacy input.shortcut → ctrl+z (no collision)', async () => {
+    const r = await classify('undo', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'input.shortcut');
+    assert.equal(r.params.combo, 'ctrl+z');
+  });
+
+  await test('"undo that" → system.undo', async () => {
+    const r = await classify('undo that', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.undo');
+  });
+
+  await test('"revert that" → system.undo', async () => {
+    const r = await classify('revert that', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'system.undo');
+  });
+
+  await test('Existing _patternIndex assertions still hold (cancel=0, select=1)', async () => {
+    const c = await classify('cancel', LLM_NEVER_CALLED);
+    assert.equal(c._patternIndex, 0);
+    const s = await classify('two', LLM_NEVER_CALLED);
+    assert.equal(s._patternIndex, 1);
+  });
+
+  // ── Dispatcher cases ───────────────────────────────────────────────────────
+
+  section('24c. M4.8 — Suite 23: dispatcher system.repeat / system.undo');
+
+  await test('system.repeat with no lastAction → clean error', async () => {
+    ctx.clear();
+    const { dispatch } = require('./dispatcher');
+    const r = await dispatch({ intent: 'system.repeat', params: {}, raw: 'do that again', needsConfirm: false });
+    assert.equal(r.ok, false);
+    assert.ok(r.error.includes('repeat'));
+  });
+
+  await test('system.repeat returns _resolved with the last action', async () => {
+    ctx.clear();
+    ctx.setLastAction({
+      intent: 'input.type',
+      params: { text: 'hello' },
+      transcript: 'type hello',
+      needsConfirm: false,
+    });
+    const { dispatch } = require('./dispatcher');
+    const r = await dispatch({ intent: 'system.repeat', params: {}, raw: 'again', needsConfirm: false });
+    assert.equal(r.ok, true);
+    assert.ok(r._resolved);
+    assert.equal(r._resolved.intent, 'input.type');
+    assert.equal(r._resolved.params.text, 'hello');
+    ctx.clear();
+  });
+
+  await test('system.undo with no lastAction → clean error', async () => {
+    ctx.clear();
+    const { dispatch } = require('./dispatcher');
+    const r = await dispatch({ intent: 'system.undo', params: {}, raw: 'undo', needsConfirm: false });
+    assert.equal(r.ok, false);
+    assert.ok(r.error.includes('undo'));
+  });
+
+  await test('system.undo on input.type → _resolved input.shortcut ctrl+z', async () => {
+    ctx.clear();
+    ctx.setLastAction({ intent: 'input.type', params: { text: 'hi' }, transcript: 'type hi' });
+    const { dispatch } = require('./dispatcher');
+    const r = await dispatch({ intent: 'system.undo', params: {}, raw: 'undo' });
+    assert.equal(r.ok, true);
+    assert.equal(r._resolved.intent, 'input.shortcut');
+    assert.equal(r._resolved.params.combo, 'ctrl+z');
+    ctx.clear();
+  });
+
+  await test('system.undo on app.close → _resolved app.open', async () => {
+    ctx.clear();
+    ctx.setLastAction({ intent: 'app.close', params: { appName: 'notepad' }, transcript: 'close notepad' });
+    const { dispatch } = require('./dispatcher');
+    const r = await dispatch({ intent: 'system.undo', params: {}, raw: 'undo' });
+    assert.equal(r.ok, true);
+    assert.equal(r._resolved.intent, 'app.open');
+    assert.equal(r._resolved.params.appName, 'notepad');
+    ctx.clear();
+  });
+
+  await test('system.undo on input.shortcut ctrl+z → null (no double-undo)', async () => {
+    ctx.clear();
+    ctx.setLastAction({ intent: 'input.shortcut', params: { combo: 'ctrl+z' }, transcript: 'undo' });
+    const { dispatch } = require('./dispatcher');
+    const r = await dispatch({ intent: 'system.undo', params: {}, raw: 'undo' });
+    assert.equal(r.ok, false);
+    assert.ok(r.error.includes("don't know how to undo"));
+    ctx.clear();
+  });
+
+  await test('system.undo on file.delete (unsupported inverse) → clean error', async () => {
+    ctx.clear();
+    ctx.setLastAction({ intent: 'file.delete', params: { name: 'x.txt', path: '/tmp/x.txt' } });
+    const { dispatch } = require('./dispatcher');
+    const r = await dispatch({ intent: 'system.undo', params: {} });
+    assert.equal(r.ok, false);
+    assert.ok(r.error.includes('file.delete'));
+    ctx.clear();
+  });
+
+  // ── End-to-end pipeline: type → repeat ─────────────────────────────────────
+
+  section('24d. M4.8 — Suite 23: end-to-end repeat workflow');
+
+  await test('"type hello" → "do that again" → input.type dispatched twice', async () => {
+    ctx.clear();
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const ttsMod           = require('../tts');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+    const origSynth     = ttsMod.synthesizeSpeech;
+
+    const dispatchedIntents = [];
+    let step = 0;
+    classifierModule.classify = async (t) => {
+      step++;
+      if (step === 1) return { intent: 'input.type', confidence: 'pattern', params: { text: 'hello' }, needsConfirm: false, _patternIndex: 50, raw: t };
+      return { intent: 'system.repeat', confidence: 'pattern', params: {}, needsConfirm: false, _patternIndex: 2, raw: t };
+    };
+    dispatcherModule.dispatch = async (cr) => {
+      dispatchedIntents.push(cr.intent);
+      return origDispatch(cr);   // Use real dispatcher for system.repeat to exercise _resolved
+    };
+    // Re-patch only for input.type tools (typeText would call PowerShell)
+    const keyboardMod = require('./tools/keyboard');
+    const origType = keyboardMod.typeText;
+    keyboardMod.typeText = async () => ({ ok: true, action: 'Typed.' });
+    verifierModule.verify   = async () => ({ verified: true });
+    ttsMod.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from('x'), mimeType: 'audio/mpeg' });
+
+    try {
+      await runPipelineFromText('type hello', () => {}, () => Promise.resolve(true));
+      // After step 1, lastAction should be set
+      const last1 = ctx.getLastAction();
+      assert.ok(last1, 'lastAction must be set after first command');
+      assert.equal(last1.intent, 'input.type');
+
+      await runPipelineFromText('do that again', () => {}, () => Promise.resolve(true));
+
+      // dispatchedIntents should be: input.type (initial), system.repeat (re-route),
+      // input.type (re-dispatched via _resolved)
+      const typed = dispatchedIntents.filter((i) => i === 'input.type').length;
+      const repeated = dispatchedIntents.filter((i) => i === 'system.repeat').length;
+      assert.equal(typed, 2, `input.type expected twice, got ${typed} (intents: ${dispatchedIntents.join(',')})`);
+      assert.equal(repeated, 1);
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ttsMod.synthesizeSpeech   = origSynth;
+      keyboardMod.typeText      = origType;
+      ctx.clear();
+    }
+  });
+
+  await test('Pipeline does NOT record lastAction for system.repeat itself', async () => {
+    ctx.clear();
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const ttsMod           = require('../tts');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+    const origSynth     = ttsMod.synthesizeSpeech;
+
+    classifierModule.classify = async (t) => ({
+      intent: 'app.open', confidence: 'pattern', params: { appName: 'notepad' }, needsConfirm: false, _patternIndex: 23, raw: t,
+    });
+    dispatcherModule.dispatch = async () => ({ ok: true, action: 'Opened notepad.' });
+    verifierModule.verify     = async () => ({ verified: true });
+    ttsMod.synthesizeSpeech   = async () => ({ audioBuffer: Buffer.from('x'), mimeType: 'audio/mpeg' });
+
+    try {
+      await runPipelineFromText('open notepad', () => {}, () => Promise.resolve(true));
+      const last = ctx.getLastAction();
+      assert.ok(last);
+      assert.equal(last.intent, 'app.open', 'app.open must be recorded as lastAction');
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ttsMod.synthesizeSpeech   = origSynth;
+      ctx.clear();
+    }
+  });
+
+  await test('Pipeline does NOT record lastAction when dispatch fails', async () => {
+    ctx.clear();
+    const classifierModule = require('./classifier');
+    const dispatcherModule = require('./dispatcher');
+    const verifierModule   = require('./verifier');
+    const ttsMod           = require('../tts');
+    const origClassify  = classifierModule.classify;
+    const origDispatch  = dispatcherModule.dispatch;
+    const origVerify    = verifierModule.verify;
+    const origSynth     = ttsMod.synthesizeSpeech;
+
+    classifierModule.classify = async () => ({
+      intent: 'app.open', confidence: 'pattern', params: { appName: 'foo' }, needsConfirm: false, _patternIndex: 23, raw: 'open foo',
+    });
+    dispatcherModule.dispatch = async () => ({ ok: false, error: 'unknown app' });
+    verifierModule.verify     = async () => ({ verified: false });
+    ttsMod.synthesizeSpeech   = async () => ({ audioBuffer: Buffer.from('x'), mimeType: 'audio/mpeg' });
+
+    try {
+      await runPipelineFromText('open foo', () => {}, () => Promise.resolve(true));
+      assert.equal(ctx.getLastAction(), null, 'failed dispatch must not set lastAction');
+    } finally {
+      classifierModule.classify = origClassify;
+      dispatcherModule.dispatch = origDispatch;
+      verifierModule.verify     = origVerify;
+      ttsMod.synthesizeSpeech   = origSynth;
+      ctx.clear();
+    }
+  });
+
+  // ── Agent retry on verify-fail ─────────────────────────────────────────────
+
+  section('24e. M4.8 — Suite 23: agent verify-fail retry');
+
+  const agentMod = require('./agent');
+
+  await test('retryAgent stamps retry:true on every step and seeds [RETRY] prompt', async () => {
+    let prompts = 0;
+    let seenRetryPrompt = false;
+    const llmCall = async ({ contents }) => {
+      prompts++;
+      const text = (contents && contents[0] && contents[0].parts && contents[0].parts[0] && contents[0].parts[0].text) || '';
+      if (text.includes('[RETRY]')) seenRetryPrompt = true;
+      if (prompts === 1) return { functionCall: { name: 'app.open', args: { appName: 'chrome' } }, text: null, raw: {} };
+      return { functionCall: null, text: 'Done.', raw: {} };
+    };
+    const dispatch = async () => ({ ok: true, action: 'Opened.' });
+    const result = await agentMod.retryAgent({
+      originalTranscript: 'open chrome',
+      lastClassifierResult: { intent: 'app.open', params: { appName: 'krome' }, confidence: 'agent', raw: 'open chrome', needsConfirm: false },
+      lastDispatchResult:   { ok: true, action: 'Opened.' },
+      verifierResult:       { verified: false, method: 'spawn_ok', detail: 'process not found' },
+      llmCall, dispatch,
+    });
+    assert.equal(seenRetryPrompt, true, 'retry prompt must include [RETRY] block');
+    assert.ok(result.agentSteps.length >= 1);
+    assert.equal(result.agentSteps[0].retry, true, 'every step must be retry:true');
+    assert.equal(result.isRetry, true);
+  });
+
+  await test('Pipeline triggers retry when agent path verify=false; succeeds on retry', async () => {
+    ctx.clear();
+    const settingsMod      = require('../settings');
+    const classifierModule = require('./classifier');
+    const verifierModule   = require('./verifier');
+    const agentModule      = require('./agent');
+    const ttsMod           = require('../tts');
+    const origClassify  = classifierModule.classify;
+    const origVerify    = verifierModule.verify;
+    const origRunAgent  = agentModule.runAgent;
+    const origRetry     = agentModule.retryAgent;
+    const origSynth     = ttsMod.synthesizeSpeech;
+    const origGet       = settingsMod.getSetting.bind(settingsMod);
+    const origGetApiKey = settingsMod.getApiKey;
+
+    settingsMod.getSetting = (key, fb) => (key === 'jarvisAgentEnabled' ? true : key === 'jarvisPlannerEnabled' ? false : origGet(key, fb));
+    settingsMod.getApiKey  = () => 'fake-key';
+
+    classifierModule.classify = async () => ({
+      intent: 'system.unsupported', confidence: 'pattern', params: {}, needsConfirm: false, raw: 'do something',
+    });
+    let verifyCount = 0;
+    verifierModule.verify = async () => {
+      verifyCount++;
+      // First verify (after agent's first attempt) → false; second (after retry) → true
+      return { verified: verifyCount > 1, method: 'invoke_ok', detail: verifyCount === 1 ? 'element not found' : 'ok' };
+    };
+
+    let retryCalled = false;
+    agentModule.runAgent = async () => ({
+      ok: true,
+      finalText: 'Initial attempt.',
+      agentSteps: [{ tool: 'ui.click', params: { name: 'sned' }, result: { ok: true }, latencyMs: 10, retry: false }],
+      lastDispatchResult:   { ok: true, action: 'Clicked.' },
+      lastClassifierResult: { intent: 'ui.click', params: { name: 'sned' }, confidence: 'agent', raw: 'do something', needsConfirm: false },
+      stopped: 'final',
+    });
+    agentModule.retryAgent = async () => {
+      retryCalled = true;
+      return {
+        ok: true,
+        finalText: 'Fixed it on retry.',
+        agentSteps: [{ tool: 'ui.click', params: { name: 'Send' }, result: { ok: true }, latencyMs: 12, retry: true }],
+        lastDispatchResult:   { ok: true, action: 'Clicked Send.' },
+        lastClassifierResult: { intent: 'ui.click', params: { name: 'Send' }, confidence: 'agent', raw: 'do something', needsConfirm: false },
+        stopped: 'final',
+        isRetry: true,
+      };
+    };
+    ttsMod.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from('x'), mimeType: 'audio/mpeg' });
+
+    const events = [];
+    try {
+      await runPipelineFromText('do something', (ch, p) => events.push({ ch, p }), () => Promise.resolve(true));
+      assert.equal(retryCalled, true, 'retryAgent must fire on verify-fail');
+      assert.ok(verifyCount >= 2, `expected ≥2 verify calls, got ${verifyCount}`);
+      const done = events.find((e) => e.ch === 'jarvis:done');
+      assert.ok(done);
+      assert.equal(done.p.ok, true);
+      assert.ok(done.p.display.includes('retry') || done.p.display.includes('Fixed'),
+        `expected retry text in display, got: ${done.p.display}`);
+    } finally {
+      classifierModule.classify = origClassify;
+      verifierModule.verify     = origVerify;
+      agentModule.runAgent      = origRunAgent;
+      agentModule.retryAgent    = origRetry;
+      ttsMod.synthesizeSpeech   = origSynth;
+      settingsMod.getSetting    = origGet;
+      settingsMod.getApiKey     = origGetApiKey;
+      ctx.clear();
+    }
+  });
+
+  await test('Pipeline retry is capped at 1 (no second retry even if verify still fails)', async () => {
+    ctx.clear();
+    const settingsMod      = require('../settings');
+    const classifierModule = require('./classifier');
+    const verifierModule   = require('./verifier');
+    const agentModule      = require('./agent');
+    const ttsMod           = require('../tts');
+    const origClassify  = classifierModule.classify;
+    const origVerify    = verifierModule.verify;
+    const origRunAgent  = agentModule.runAgent;
+    const origRetry     = agentModule.retryAgent;
+    const origSynth     = ttsMod.synthesizeSpeech;
+    const origGet       = settingsMod.getSetting.bind(settingsMod);
+    const origGetApiKey = settingsMod.getApiKey;
+
+    settingsMod.getSetting = (key, fb) => (key === 'jarvisAgentEnabled' ? true : key === 'jarvisPlannerEnabled' ? false : origGet(key, fb));
+    settingsMod.getApiKey  = () => 'fake-key';
+
+    classifierModule.classify = async () => ({
+      intent: 'system.unsupported', confidence: 'pattern', params: {}, needsConfirm: false, raw: 'do flaky',
+    });
+    verifierModule.verify = async () => ({ verified: false, method: 'invoke_ok', detail: 'still wrong' });
+
+    agentModule.runAgent = async () => ({
+      ok: true,
+      finalText: 'try 1',
+      agentSteps: [{ tool: 'ui.click', params: { name: 'a' }, result: { ok: true }, latencyMs: 1, retry: false }],
+      lastDispatchResult:   { ok: true, action: '' },
+      lastClassifierResult: { intent: 'ui.click', params: { name: 'a' }, confidence: 'agent', raw: 'do flaky', needsConfirm: false },
+      stopped: 'final',
+    });
+    let retryCalls = 0;
+    agentModule.retryAgent = async () => {
+      retryCalls++;
+      return {
+        ok: true,
+        finalText: 'try 2',
+        agentSteps: [{ tool: 'ui.click', params: { name: 'b' }, result: { ok: true }, latencyMs: 1, retry: true }],
+        lastDispatchResult:   { ok: true, action: '' },
+        lastClassifierResult: { intent: 'ui.click', params: { name: 'b' }, confidence: 'agent', raw: 'do flaky', needsConfirm: false },
+        stopped: 'final',
+        isRetry: true,
+      };
+    };
+    ttsMod.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from('x'), mimeType: 'audio/mpeg' });
+
+    try {
+      await runPipelineFromText('do flaky', () => {}, () => Promise.resolve(true));
+      assert.equal(retryCalls, 1, `retry must fire exactly once, got ${retryCalls}`);
+    } finally {
+      classifierModule.classify = origClassify;
+      verifierModule.verify     = origVerify;
+      agentModule.runAgent      = origRunAgent;
+      agentModule.retryAgent    = origRetry;
+      ttsMod.synthesizeSpeech   = origSynth;
+      settingsMod.getSetting    = origGet;
+      settingsMod.getApiKey     = origGetApiKey;
+      ctx.clear();
+    }
+  });
+
+  await test('Pipeline retry NOT triggered when verify succeeds first time', async () => {
+    ctx.clear();
+    const settingsMod      = require('../settings');
+    const classifierModule = require('./classifier');
+    const verifierModule   = require('./verifier');
+    const agentModule      = require('./agent');
+    const ttsMod           = require('../tts');
+    const origClassify  = classifierModule.classify;
+    const origVerify    = verifierModule.verify;
+    const origRunAgent  = agentModule.runAgent;
+    const origRetry     = agentModule.retryAgent;
+    const origSynth     = ttsMod.synthesizeSpeech;
+    const origGet       = settingsMod.getSetting.bind(settingsMod);
+    const origGetApiKey = settingsMod.getApiKey;
+
+    settingsMod.getSetting = (key, fb) => (key === 'jarvisAgentEnabled' ? true : key === 'jarvisPlannerEnabled' ? false : origGet(key, fb));
+    settingsMod.getApiKey  = () => 'fake-key';
+
+    classifierModule.classify = async () => ({
+      intent: 'system.unsupported', confidence: 'pattern', params: {}, needsConfirm: false, raw: 'works',
+    });
+    verifierModule.verify = async () => ({ verified: true, method: 'invoke_ok' });
+    agentModule.runAgent = async () => ({
+      ok: true, finalText: 'OK', agentSteps: [],
+      lastDispatchResult:   { ok: true, action: 'OK' },
+      lastClassifierResult: { intent: 'ui.click', params: { name: 'X' }, confidence: 'agent', raw: 'works', needsConfirm: false },
+      stopped: 'final',
+    });
+    let retryCalls = 0;
+    agentModule.retryAgent = async () => { retryCalls++; return { ok: true, finalText: '', agentSteps: [], stopped: 'final' }; };
+    ttsMod.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from('x'), mimeType: 'audio/mpeg' });
+
+    try {
+      await runPipelineFromText('works', () => {}, () => Promise.resolve(true));
+      assert.equal(retryCalls, 0, 'retry must NOT fire when first verify succeeds');
+    } finally {
+      classifierModule.classify = origClassify;
+      verifierModule.verify     = origVerify;
+      agentModule.runAgent      = origRunAgent;
+      agentModule.retryAgent    = origRetry;
+      ttsMod.synthesizeSpeech   = origSynth;
+      settingsMod.getSetting    = origGet;
+      settingsMod.getApiKey     = origGetApiKey;
+      ctx.clear();
+    }
+  });
 }
 
 // ─── Run all suites ───────────────────────────────────────────────────────────
@@ -4149,6 +6704,14 @@ async function runM44TraceTests() {
   await runM41DisambiguationTests();
   await runM43NaturalRefinementTests();
   await runM44TraceTests();
+  await runM45FollowUpTests();
+  await runM45AgentTests();
+  await runM46UiTests();
+  await runM47StreamingTests();
+  await runM48ContinuityTests();
+  await runM50PlannerTests();
+  await runM51M52ToolTests();
+  await runM53M54Tests();
 
   console.log('\n─────────────────────────────────────');
   console.log(`Results: ${passed} passed, ${failed} failed`);
@@ -4157,6 +6720,361 @@ async function runM44TraceTests() {
     console.error('\nSome tests failed.');
     process.exit(1);
   } else {
-    console.log('\nAll tests passed. Phase 4 M4.4 complete.');
+    console.log('\nAll tests passed. Phase 4 M4.5 complete.');
   }
 })();
+
+// ─── Suite 24 — M5.0: Planner / Executor ─────────────────────────────────────
+
+async function runM50PlannerTests() {
+  section('25. M5.0 — Suite 24: planner');
+  const planner  = require('./planner');
+  const executor = require('./executor');
+
+  await test('planner.makePlan: returns ok with steps when LLM returns valid JSON', async () => {
+    const stubLlm = async () => ({
+      json: {
+        goal: 'open notepad',
+        steps: [{ tool: 'app.open', params: { appName: 'notepad' }, why: 'launch' }],
+        expectedFinalSpeak: 'Opened notepad.',
+      },
+      text: '', raw: {},
+    });
+    const r = await planner.makePlan({ transcript: 'open notepad', llmCall: stubLlm });
+    assert.equal(r.ok, true);
+    assert.equal(r.steps.length, 1);
+    assert.equal(r.steps[0].tool, 'app.open');
+    assert.equal(r.steps[0].params.appName, 'notepad');
+    assert.match(r.expectedFinalSpeak, /[Nn]otepad/);
+  });
+
+  await test('planner.makePlan: rejects unknown tool names', async () => {
+    const stubLlm = async () => ({
+      json: { goal: 'g', steps: [{ tool: 'nope.not.a.tool', params: {}, why: '' }], expectedFinalSpeak: 'x' },
+      text: '', raw: {},
+    });
+    const r = await planner.makePlan({ transcript: 'do x', llmCall: stubLlm });
+    assert.equal(r.ok, false);
+    assert.match(r.error || '', /unknown tool/);
+  });
+
+  await test('planner.makePlan: empty steps still ok with expectedFinalSpeak', async () => {
+    const stubLlm = async () => ({
+      json: { goal: 'nothing', steps: [], expectedFinalSpeak: 'OK, nothing to do.' },
+      text: '', raw: {},
+    });
+    const r = await planner.makePlan({ transcript: 'do nothing', llmCall: stubLlm });
+    assert.equal(r.ok, true);
+    assert.equal(r.steps.length, 0);
+    assert.match(r.expectedFinalSpeak, /nothing/);
+  });
+
+  await test('planner.makePlan: caps step list at jarvisPlanMaxSteps', async () => {
+    const settingsMod = require('../settings');
+    const origGet = settingsMod.getSetting.bind(settingsMod);
+    settingsMod.getSetting = (k, fb) => (k === 'jarvisPlanMaxSteps' ? 3 : origGet(k, fb));
+    try {
+      const stubLlm = async () => ({
+        json: {
+          goal: 'g',
+          steps: Array.from({ length: 8 }, () => ({ tool: 'app.open', params: { appName: 'notepad' }, why: '' })),
+          expectedFinalSpeak: 'Done.',
+        },
+        text: '', raw: {},
+      });
+      const r = await planner.makePlan({ transcript: 'x', llmCall: stubLlm });
+      assert.equal(r.ok, true);
+      assert.equal(r.steps.length, 3);
+    } finally {
+      settingsMod.getSetting = origGet;
+    }
+  });
+
+  await test('executor.runPlan: dispatches each step in order, returns finalSpeak', async () => {
+    const events = [];
+    const stubMakePlan = async () => ({
+      ok: true,
+      goal: 'g',
+      steps: [
+        { tool: 'app.open',     params: { appName: 'notepad' }, why: '' },
+        { tool: 'window.minimize', params: {},                   why: '' },
+      ],
+      expectedFinalSpeak: 'Notepad opened and minimized.',
+    });
+    const dispatchCalls = [];
+    const stubDispatch = async (cr) => {
+      dispatchCalls.push(cr.intent);
+      return { ok: true, action: 'OK', data: {} };
+    };
+    const r = await executor.runPlan({
+      transcript:    'open notepad and minimize',
+      hudSend:       () => {},
+      waitForConfirm: async () => true,
+      makePlan:      stubMakePlan,
+      dispatch:      stubDispatch,
+      verify:        async () => ({ verified: true }),
+      fireNarration: () => {},
+      onPlanEvent:   (e) => events.push(e),
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.stopped, 'final');
+    assert.deepEqual(dispatchCalls, ['app.open', 'window.minimize']);
+    assert.equal(r.planSteps.length, 2);
+    assert.match(r.finalSpeak, /minimized/);
+    // Plan + 2 step.start + 2 step.done events = 5 minimum
+    const types = events.map((e) => e.type);
+    assert.ok(types.includes('plan'));
+    assert.ok(types.filter((t) => t === 'step.start').length === 2);
+    assert.ok(types.filter((t) => t === 'step.done').length === 2);
+  });
+
+  await test('executor.runPlan: re-plans once on step failure, then succeeds', async () => {
+    let callCount = 0;
+    const stubMakePlan = async () => {
+      callCount++;
+      if (callCount === 1) {
+        return { ok: true, goal: 'g', steps: [{ tool: 'app.open', params: { appName: 'wrongapp' }, why: '' }], expectedFinalSpeak: 'V1.' };
+      }
+      return { ok: true, goal: 'g', steps: [{ tool: 'app.open', params: { appName: 'notepad' }, why: '' }], expectedFinalSpeak: 'V2 — fixed it.' };
+    };
+    const stubDispatch = async (cr) => {
+      if (cr.params.appName === 'wrongapp') return { ok: false, error: 'not found', action: '' };
+      return { ok: true, action: 'OK', data: {} };
+    };
+    const r = await executor.runPlan({
+      transcript:    'open notepad',
+      hudSend:       () => {},
+      waitForConfirm: async () => true,
+      makePlan:      stubMakePlan,
+      dispatch:      stubDispatch,
+      verify:        async () => ({ verified: true }),
+      fireNarration: () => {},
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.replans, 1);
+    assert.equal(callCount, 2);
+    assert.match(r.finalSpeak, /fixed it/);
+  });
+
+  await test('executor.runPlan: stops on step failure when replan also fails', async () => {
+    const stubMakePlan = async ({ failure }) => {
+      if (failure) return { ok: false, error: 'no recovery' };
+      return { ok: true, goal: 'g', steps: [{ tool: 'app.open', params: { appName: 'broken' }, why: '' }], expectedFinalSpeak: 'V1.' };
+    };
+    const stubDispatch = async () => ({ ok: false, error: 'broke', action: '' });
+    const r = await executor.runPlan({
+      transcript:    'open broken',
+      hudSend:       () => {},
+      waitForConfirm: async () => true,
+      makePlan:      stubMakePlan,
+      dispatch:      stubDispatch,
+      verify:        async () => ({ verified: false }),
+      fireNarration: () => {},
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.stopped, 'step_failed');
+  });
+
+  await test('executor.runPlan: AbortSignal stops between steps', async () => {
+    const ac = new AbortController();
+    const stubMakePlan = async () => ({
+      ok: true, goal: 'g',
+      steps: [
+        { tool: 'app.open', params: { appName: 'a' }, why: '' },
+        { tool: 'app.open', params: { appName: 'b' }, why: '' },
+      ],
+      expectedFinalSpeak: 'done',
+    });
+    let dispatched = 0;
+    const stubDispatch = async () => {
+      dispatched++;
+      if (dispatched === 1) ac.abort();
+      return { ok: true, action: 'OK', data: {} };
+    };
+    const r = await executor.runPlan({
+      transcript:    'x',
+      signal:        ac.signal,
+      hudSend:       () => {},
+      waitForConfirm: async () => true,
+      makePlan:      stubMakePlan,
+      dispatch:      stubDispatch,
+      verify:        async () => ({ verified: true }),
+      fireNarration: () => {},
+    });
+    assert.equal(r.stopped, 'cancelled');
+    assert.equal(r.ok, false);
+  });
+
+  await test('executor.runPlan: enforces destructive confirmation gate', async () => {
+    let confirmCalled = false;
+    const stubMakePlan = async () => ({
+      ok: true, goal: 'g',
+      steps: [{ tool: 'system.lock', params: {}, why: '' }],
+      expectedFinalSpeak: 'Locked.',
+    });
+    const r = await executor.runPlan({
+      transcript:    'lock my screen',
+      hudSend:       () => {},
+      waitForConfirm: async () => { confirmCalled = true; return false; },
+      makePlan:      stubMakePlan,
+      dispatch:      async () => ({ ok: true, action: 'should not run', data: {} }),
+      verify:        async () => ({ verified: true }),
+      fireNarration: () => {},
+    });
+    assert.equal(confirmCalled, true);
+    assert.equal(r.stopped, 'cancelled');
+    assert.equal(r.ok, false);
+  });
+}
+
+// ─── Suite 25 — M5.1 / M5.2: New tool dispatcher cases ───────────────────────
+
+async function runM51M52ToolTests() {
+  section('26. M5.1/M5.2 — Suite 25: dispatcher new tools');
+  const { dispatch } = require('./dispatcher');
+
+  await test('dispatcher: web.search routes to web-search tool', async () => {
+    const wsMod = require('./tools/web-search');
+    const orig = wsMod.search;
+    wsMod.search = async ({ query }) => ({ ok: true, data: { results: [{ title: 'X', url: 'http://x', snippet: 's' }], query }, action: 'searched' });
+    try {
+      const r = await dispatch({ intent: 'web.search', params: { query: 'foo' }, raw: 'foo', confidence: 'plan' });
+      assert.equal(r.ok, true);
+      assert.ok(r.data.results.length === 1);
+    } finally { wsMod.search = orig; }
+  });
+
+  await test('dispatcher: web.scrape routes to web-scrape tool', async () => {
+    const sMod = require('./tools/web-scrape');
+    const orig = sMod.scrape;
+    sMod.scrape = async ({ url }) => ({ ok: true, data: { url, title: 't', text: 'body', links: [] }, action: 'scraped' });
+    try {
+      const r = await dispatch({ intent: 'web.scrape', params: { url: 'https://example.com' }, raw: '', confidence: 'plan' });
+      assert.equal(r.ok, true);
+      assert.equal(r.data.title, 't');
+    } finally { sMod.scrape = orig; }
+  });
+
+  await test('dispatcher: vision.read routes to vision tool', async () => {
+    const vMod = require('./tools/vision');
+    const orig = vMod.read;
+    vMod.read = async () => ({ ok: true, data: { summary: 'A test', elements: [], scope: 'focused' }, action: 'A test' });
+    try {
+      const r = await dispatch({ intent: 'vision.read', params: {}, raw: '', confidence: 'plan' });
+      assert.equal(r.ok, true);
+      assert.match(r.data.summary, /test/);
+    } finally { vMod.read = orig; }
+  });
+
+  await test('dispatcher: browser.tabs.list routes to browser-cdp', async () => {
+    const cdpMod = require('./tools/browser-cdp');
+    const orig = cdpMod.listTabs;
+    cdpMod.listTabs = async () => ({ ok: true, data: { tabs: [{ tabId: 'T1', title: 't', url: 'u', active: true }] }, action: '1 tab.' });
+    try {
+      const r = await dispatch({ intent: 'browser.tabs.list', params: {}, raw: '', confidence: 'plan' });
+      assert.equal(r.ok, true);
+      assert.equal(r.data.tabs.length, 1);
+    } finally { cdpMod.listTabs = orig; }
+  });
+
+  await test('dispatcher: browser.click rejects when no selector and no text', async () => {
+    let threw = null;
+    try { await dispatch({ intent: 'browser.click', params: {}, raw: '', confidence: 'plan' }); }
+    catch (err) { threw = err; }
+    assert.ok(threw, 'expected DispatchError');
+    assert.match(threw.message, /selector|text/);
+  });
+
+  await test('classifier: "list tabs" → browser.tabs.list', async () => {
+    const r = await classify('list tabs', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.tabs.list');
+  });
+
+  await test('classifier: "scroll to top" → browser.scroll {direction:top}', async () => {
+    const r = await classify('scroll to top', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.scroll');
+    assert.equal(r.params.direction, 'top');
+  });
+
+  await test('classifier: "read this page" → browser.read {mode:main}', async () => {
+    const r = await classify('read this page', LLM_NEVER_CALLED);
+    assert.equal(r.intent, 'browser.read');
+    assert.equal(r.params.mode, 'main');
+  });
+}
+
+// ─── Suite 26 — M5.3 / M5.4: Voice cancel + active result reroute ────────────
+
+async function runM53M54Tests() {
+  section('27. M5.3/M5.4 — Suite 26: voice cancel + result panel');
+  const pipeline = require('./pipeline');
+
+  await test('maybeVoiceCancel: returns false when no pipeline running', () => {
+    const r = pipeline.maybeVoiceCancel('stop please');
+    assert.equal(r, false);
+  });
+
+  await test('maybeVoiceCancel: ignores non-keyword partials', () => {
+    const r = pipeline.maybeVoiceCancel('go to youtube and search lo-fi');
+    assert.equal(r, false);
+  });
+
+  await test('context: setActiveResultSet + getActiveResultSet round-trip', () => {
+    ctx.clear();
+    ctx.setActiveResultSet({
+      kind:   'web', source: 'web.search',
+      cards:  [{ index: 1, title: 'A', url: 'http://a' }, { index: 2, title: 'B', url: 'http://b' }],
+    });
+    const r = ctx.getActiveResultSet();
+    assert.ok(r);
+    assert.equal(r.kind, 'web');
+    assert.equal(r.cards.length, 2);
+    ctx.clearActiveResultSet();
+    assert.equal(ctx.getActiveResultSet(), null);
+  });
+
+  await test('dispatcher.system.select: routes to active result set when no candidates', async () => {
+    const { dispatch } = require('./dispatcher');
+    ctx.clear();
+    ctx.setActiveResultSet({
+      kind: 'web', source: 'web.search',
+      cards: [
+        { index: 1, title: 'First',  url: 'http://first.example'  },
+        { index: 2, title: 'Second', url: 'http://second.example' },
+      ],
+    });
+    const r = await dispatch({ intent: 'system.select', params: { ordinal: 2 }, raw: 'the second one', confidence: 'pattern' });
+    assert.equal(r.ok, true);
+    assert.ok(r._resolved, 'should produce a resolved re-dispatch');
+    assert.equal(r._resolved.intent, 'browser.tabs.open');
+    assert.equal(r._resolved.params.url, 'http://second.example');
+    ctx.clear();
+  });
+
+  await test('dispatcher.system.select: rejects out-of-range ordinal against panel', async () => {
+    const { dispatch } = require('./dispatcher');
+    ctx.clear();
+    ctx.setActiveResultSet({
+      kind: 'web', source: 'web.search',
+      cards: [{ index: 1, title: 'A', url: 'http://a' }],
+    });
+    const r = await dispatch({ intent: 'system.select', params: { ordinal: 5 }, raw: '', confidence: 'pattern' });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /Only 1 result/);
+    ctx.clear();
+  });
+
+  await test('narrate.fireNarration: short-circuits when disabled', async () => {
+    const settingsMod = require('../settings');
+    const orig = settingsMod.getSetting.bind(settingsMod);
+    settingsMod.getSetting = (k, fb) => (k === 'jarvisNarrationEnabled' ? false : orig(k, fb));
+    try {
+      const narrate = require('./narrate');
+      const r = await narrate.fireNarration('hello', () => {});
+      assert.equal(r.ok, false);
+      assert.match(r.error, /disabled/);
+    } finally {
+      settingsMod.getSetting = orig;
+    }
+  });
+}

@@ -34,10 +34,22 @@ class DispatchError extends Error {
 
 /**
  * @param {ClassifierResult} classifierResult
+ * @param {object} [opts]
+ * @param {AbortSignal} [opts.signal]   — M4.7 cancellation signal. When aborted,
+ *                                        the dispatcher returns a cancellation
+ *                                        result instead of running the tool.
+ *                                        Tools that support abort (file.find,
+ *                                        ui.*) will themselves check the signal.
  * @returns {Promise<ToolResult>}
  */
-async function dispatch(classifierResult) {
+async function dispatch(classifierResult, opts = {}) {
   const { intent, params = {} } = classifierResult;
+  const signal = opts && opts.signal;
+
+  // M4.7 — pre-check: if already aborted before we even start, fast-exit.
+  if (signal && signal.aborted) {
+    return { ok: false, error: 'cancelled', action: '', cancelled: true };
+  }
 
   switch (intent) {
 
@@ -82,8 +94,8 @@ async function dispatch(classifierResult) {
         extension:    params.extension,
         locationHint: params.locationHint,
       });
-      // Write file context when exactly one match found (unambiguous)
-      if (findResult.ok && findResult.data?.matches?.length === 1) {
+      // Write file context for the top match (best-scored result), even when multiple exist
+      if (findResult.ok && findResult.data?.matches?.length >= 1) {
         const m = findResult.data.matches[0];
         context.setFileTarget(m.name, m.path);
       }
@@ -405,7 +417,26 @@ async function dispatch(classifierResult) {
     }
 
     case 'browser.search': {
-      const query = requireParam(params.query, 'search query');
+      const query  = requireParam(params.query, 'search query');
+      const engine = params.engine || 'google';
+
+      // M5.1 — when CDP is enabled, prefer browser-cdp.search (returns parsed
+      // results so the planner can chain). Falls back to the Phase 1 path on
+      // CDP failure so Tier B tests and pattern paths keep working.
+      const settingsMod = require('../settings');
+      if (settingsMod.getSetting('jarvisChromeAutoLaunch', true)) {
+        try {
+          const cdp = require('./tools/browser-cdp');
+          const r   = await cdp.search({ query, engine });
+          if (r && r.ok) return r;
+          // Fall through to legacy on a CDP failure
+          console.warn(`[Jarvis] browser.search CDP failed: ${r && r.error}; falling back to shell.openExternal`);
+        } catch (err) {
+          console.warn(`[Jarvis] browser.search CDP error: ${err.message}; falling back`);
+        }
+      }
+
+      // Legacy Phase 1 path
       if (classifierResult._chainContext?.kind === 'browser' && classifierResult._chainContext.processName) {
         const encodedQuery = encodeURIComponent(query.trim());
         const searchUrl    = `https://www.google.com/search?q=${encodedQuery}`;
@@ -463,11 +494,194 @@ async function dispatch(classifierResult) {
       return writeClipboard(text);
     }
 
+    // ── UI ops (M4.6 — Windows UIAutomation) ──────────────────────────────────
+
+    case 'ui.list': {
+      const ui = require('./tools/ui');
+      return ui.listElements({
+        scope: params.scope || 'focused',
+        role:  params.role,
+      });
+    }
+
+    case 'ui.click': {
+      if (!params.name && !params.automationId) {
+        throw new DispatchError('No element name or automationId provided.');
+      }
+      const ui = require('./tools/ui');
+      const r = await ui.clickElement({
+        scope:        params.scope || 'focused',
+        name:         params.name,
+        automationId: params.automationId,
+        role:         params.role,
+      });
+      _maybeStoreUiCandidates(r, classifierResult);
+      return r;
+    }
+
+    case 'ui.fill': {
+      if (!params.name && !params.automationId) {
+        throw new DispatchError('No field name or automationId provided.');
+      }
+      if (typeof params.value !== 'string') {
+        throw new DispatchError('No value to fill.');
+      }
+      const ui = require('./tools/ui');
+      const r = await ui.fillElement({
+        scope:        params.scope || 'focused',
+        name:         params.name,
+        automationId: params.automationId,
+        value:        params.value,
+      });
+      _maybeStoreUiCandidates(r, classifierResult);
+      return r;
+    }
+
+    case 'ui.read': {
+      if (!params.name && !params.automationId) {
+        throw new DispatchError('No element name or automationId provided.');
+      }
+      const ui = require('./tools/ui');
+      const r = await ui.readElement({
+        scope:        params.scope || 'focused',
+        name:         params.name,
+        automationId: params.automationId,
+      });
+      _maybeStoreUiCandidates(r, classifierResult);
+      return r;
+    }
+
+    // ── M5.1 — Browser CDP tools (Playwright-style, attached to user's Chrome) ─
+
+    case 'browser.tabs.list': {
+      const cdp = require('./tools/browser-cdp');
+      return cdp.listTabs();
+    }
+
+    case 'browser.tabs.open': {
+      const url = requireParam(params.url, 'URL');
+      const cdp = require('./tools/browser-cdp');
+      return cdp.openTab({ url, focus: params.focus !== false });
+    }
+
+    case 'browser.tabs.close': {
+      const cdp = require('./tools/browser-cdp');
+      return cdp.closeTab({ tabId: params.tabId });
+    }
+
+    case 'browser.tabs.focus': {
+      const tabId = requireParam(params.tabId, 'tabId');
+      const cdp = require('./tools/browser-cdp');
+      return cdp.focusTab({ tabId });
+    }
+
+    case 'browser.read': {
+      const cdp = require('./tools/browser-cdp');
+      return cdp.readPage({
+        tabId:    params.tabId,
+        mode:     params.mode || 'main',
+        selector: params.selector,
+        max:      params.max,
+      });
+    }
+
+    case 'browser.click': {
+      if (!params.selector && !params.text) {
+        throw new DispatchError('Provide selector or text for browser.click.');
+      }
+      const cdp = require('./tools/browser-cdp');
+      return cdp.click({ tabId: params.tabId, selector: params.selector, text: params.text });
+    }
+
+    case 'browser.fill': {
+      if (typeof params.value !== 'string') {
+        throw new DispatchError('No value to fill.');
+      }
+      if (!params.selector && !params.label) {
+        throw new DispatchError('Provide selector or label for browser.fill.');
+      }
+      const cdp = require('./tools/browser-cdp');
+      return cdp.fill({ tabId: params.tabId, selector: params.selector, label: params.label, value: params.value });
+    }
+
+    case 'browser.scroll': {
+      const direction = params.direction || 'down';
+      const cdp = require('./tools/browser-cdp');
+      return cdp.scroll({ tabId: params.tabId, direction, amount: params.amount });
+    }
+
+    // ── M5.2 — Knowledge tools ────────────────────────────────────────────────
+
+    case 'web.search': {
+      const query = requireParam(params.query, 'search query');
+      const ws = require('./tools/web-search');
+      return ws.search({ query, count: params.count });
+    }
+
+    case 'web.scrape': {
+      const url = requireParam(params.url, 'url to scrape');
+      const wsc = require('./tools/web-scrape');
+      return wsc.scrape({ url, instructions: params.instructions });
+    }
+
+    case 'vision.read': {
+      const v = require('./tools/vision');
+      return v.read({ scope: params.scope || 'focused', question: params.question });
+    }
+
     // ── Disambiguation intents (M4.1) ─────────────────────────────────────────
 
     case 'system.select': {
       const state = context.getCandidates();
+      // M5.4 — when no disambiguation is pending, fall back to the active
+      // result panel ("open the second one" after a search).
       if (!state) {
+        const active = context.getActiveResultSet ? context.getActiveResultSet() : null;
+        if (active && Array.isArray(active.cards) && active.cards.length) {
+          const ord = Number(params.ordinal);
+          if (!ord || ord < 1 || ord > active.cards.length) {
+            return {
+              ok:    false,
+              error: `Only ${active.cards.length} result${active.cards.length !== 1 ? 's' : ''}. Say a number from 1 to ${active.cards.length}.`,
+              action:'',
+            };
+          }
+          const card = active.cards[ord - 1];
+          // Pick a re-dispatch shape based on the panel kind.
+          if (active.kind === 'web' && card.url) {
+            const resolved = {
+              intent: 'browser.tabs.open',
+              params: { url: card.url, focus: true },
+              raw:    classifierResult.raw || '',
+              confidence:   'pattern',
+              needsConfirm: false,
+            };
+            context.clearActiveResultSet();
+            return { ok: true, _resolved: resolved, data: { selected: card }, action: `Opening "${card.title || card.url}".` };
+          }
+          if (active.kind === 'tabs' && card.tabId) {
+            const resolved = {
+              intent: 'browser.tabs.focus',
+              params: { tabId: card.tabId },
+              raw:    classifierResult.raw || '',
+              confidence:   'pattern',
+              needsConfirm: false,
+            };
+            context.clearActiveResultSet();
+            return { ok: true, _resolved: resolved, data: { selected: card }, action: `Focusing "${card.title}".` };
+          }
+          if (active.kind === 'files' && card.path) {
+            const resolved = {
+              intent: 'file.open',
+              params: { path: card.path, name: card.title },
+              raw:    classifierResult.raw || '',
+              confidence:   'pattern',
+              needsConfirm: false,
+            };
+            context.clearActiveResultSet();
+            return { ok: true, _resolved: resolved, data: { selected: card }, action: `Opening "${card.title}".` };
+          }
+        }
         return { ok: false, error: 'No pending selection. Please repeat your original command.', action: '' };
       }
       const { ordinal } = params;
@@ -480,11 +694,18 @@ async function dispatch(classifierResult) {
       }
       const selected = state.candidates[ordinal - 1];
       context.clearCandidates();
-      // Build a resolved classifierResult with the confirmed path injected.
-      // The pipeline will re-dispatch this with its own confirmation gate.
+      // Build a resolved classifierResult with the confirmed selector injected.
+      // For file ops we inject path+name; for ui.* ops we also inject
+      // automationId when the candidate carried one (M4.6 follow-up).
+      const resolvedParams = {
+        ...state.classifiedResult.params,
+        path: selected.path,
+        name: selected.name,
+      };
+      if (selected.automationId) resolvedParams.automationId = selected.automationId;
       const resolved = {
         ...state.classifiedResult,
-        params: { ...state.classifiedResult.params, path: selected.path, name: selected.name },
+        params: resolvedParams,
       };
       return {
         ok:               true,
@@ -501,6 +722,54 @@ async function dispatch(classifierResult) {
         ok:     true,
         action: hadCandidates ? 'Cancelled. Selection cleared.' : 'OK, cancelled.',
         data:   { cancelled: true },
+      };
+    }
+
+    // ── M4.8 — Conversational continuation ────────────────────────────────────
+
+    case 'system.repeat': {
+      const last = context.getLastAction();
+      if (!last) {
+        return { ok: false, error: 'Nothing to repeat yet.', action: '' };
+      }
+      // Belt-and-suspenders: caller already filters meta intents from
+      // setLastAction, but guard here in case anything slipped through.
+      if (META_INTENTS.has(last.intent)) {
+        return { ok: false, error: "I can't repeat that.", action: '' };
+      }
+      const resolved = {
+        intent:       last.intent,
+        params:       { ...last.params },
+        raw:          last.transcript || '',
+        confidence:   'pattern',
+        needsConfirm: !!last.needsConfirm,
+      };
+      return {
+        ok:        true,
+        _resolved: resolved,
+        data:      { repeated: last.intent },
+        action:    `Repeating ${last.intent}.`,
+      };
+    }
+
+    case 'system.undo': {
+      const last = context.getLastAction();
+      if (!last) {
+        return { ok: false, error: 'Nothing to undo.', action: '' };
+      }
+      const inverse = _buildUndoFor(last);
+      if (!inverse) {
+        return {
+          ok:     false,
+          error:  `I don't know how to undo "${last.intent}" yet.`,
+          action: '',
+        };
+      }
+      return {
+        ok:        true,
+        _resolved: inverse,
+        data:      { undid: last.intent },
+        action:    `Undoing ${last.intent}.`,
       };
     }
 
@@ -640,4 +909,79 @@ async function dispatchBrowserShortcut(combo) {
   return pressShortcut(combo);
 }
 
-module.exports = { dispatch, DispatchError };
+// ─── M4.6 follow-up: surface ui.* ambiguous candidates to context ───────────
+// Without this, system.select ("the second one") can't resolve a UI ambiguity
+// because the candidate list never reaches context.getCandidates().
+function _maybeStoreUiCandidates(toolResult, classifierResult) {
+  if (!toolResult || !toolResult.ambiguous || !Array.isArray(toolResult.candidates)) return;
+  // Map UI candidates into the same {name, path, sizeBytes} shape file ops use,
+  // so the existing system.select re-dispatch path works uniformly.
+  const candidates = toolResult.candidates.map((c) => ({
+    name:         c.name || c.automationId || 'unnamed',
+    path:         c.automationId || c.name || '',   // re-dispatch uses this as automationId
+    sizeBytes:    0,
+    automationId: c.automationId,
+    role:         c.role,
+  }));
+  context.setCandidates(candidates, classifierResult);
+}
+
+// ─── M4.8: meta intents (never recorded as lastAction; never repeatable) ─────
+
+const META_INTENTS = new Set([
+  'system.repeat', 'system.undo',
+  'system.cancel', 'system.select',
+  'system.unsupported',
+]);
+
+/**
+ * Derive a ClassifierResult that undoes the given lastAction, or null if no
+ * known inverse. Conservative on purpose — better to refuse than to undo the
+ * wrong thing.
+ *
+ * Supported today:
+ *   - input.type      → input.shortcut ctrl+z
+ *   - input.shortcut  → input.shortcut ctrl+z (skips ctrl+z itself)
+ *   - app.close       → app.open <appName>
+ *
+ * Deferred to Phase 5:
+ *   - file.delete (recycle bin restore)
+ *   - file.rename / file.move (reverse the operation)
+ *   - clipboard.write (no prior clipboard captured)
+ */
+function _buildUndoFor(lastAction) {
+  if (!lastAction || !lastAction.intent) return null;
+  const { intent, params } = lastAction;
+
+  if (intent === 'input.type') {
+    return {
+      intent:       'input.shortcut',
+      params:       { combo: 'ctrl+z' },
+      raw:          lastAction.transcript || '',
+      confidence:   'pattern',
+      needsConfirm: false,
+    };
+  }
+  if (intent === 'input.shortcut') {
+    if (params && params.combo === 'ctrl+z') return null;       // don't undo an undo
+    return {
+      intent:       'input.shortcut',
+      params:       { combo: 'ctrl+z' },
+      raw:          lastAction.transcript || '',
+      confidence:   'pattern',
+      needsConfirm: false,
+    };
+  }
+  if (intent === 'app.close' && params && params.appName) {
+    return {
+      intent:       'app.open',
+      params:       { appName: params.appName },
+      raw:          lastAction.transcript || '',
+      confidence:   'pattern',
+      needsConfirm: false,
+    };
+  }
+  return null;
+}
+
+module.exports = { dispatch, DispatchError, META_INTENTS };

@@ -10,7 +10,12 @@
  * ElevenLabs docs: https://elevenlabs.io/docs/api-reference/speech-to-text
  */
 
-const fetch    = require('node-fetch');
+// node-fetch v3 is ESM-only — load lazily.
+let _fetchPromise = null;
+function getFetch() {
+  if (!_fetchPromise) _fetchPromise = import('node-fetch').then((m) => m.default);
+  return _fetchPromise;
+}
 const FormData = require('form-data');
 const settings = require('./settings');
 
@@ -51,6 +56,7 @@ async function transcribeAudio(audioBuffer, mimeType, opts = {}) {
   const lang = opts.languageCode || settings.getSetting('preferredSttLanguage', '');
   if (lang) form.append('language_code', lang);
 
+  const fetch = await getFetch();
   const response = await fetch(STT_URL, {
     method:  'POST',
     headers: {

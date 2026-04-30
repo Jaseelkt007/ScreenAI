@@ -185,10 +185,11 @@
         <div class="field">
           <div class="field-label lbl-v-dim">JARVIS HOTKEY</div>
           <div class="hotkey-row">
-            <div id="voice-hotkey-display" class="hotkey-pill pill-v">F8</div>
+            <div id="voice-hotkey-display" class="hotkey-pill pill-v">Right Alt</div>
             <button id="record-voice-hotkey-btn" class="action-btn btn-v" type="button">BIND</button>
             <button id="reset-voice-hotkey-btn" class="action-btn" type="button">RESET</button>
           </div>
+          <div class="field-hint">Hold to talk, release to send.</div>
         </div>
       </div>
 
@@ -212,9 +213,109 @@
           </div>
 
           <div class="field">
-            <div class="field-label lbl-v-dim">VOICE MATRIX ID</div>
-            <input type="text" id="voice-id-input" placeholder="JBFqnCBsd6RMkjVDRZzb" autocomplete="off" spellcheck="false"/>
-            <div class="field-hint"><span class="lnk" id="elevenlabs-voices-link">elevenlabs.io/voice-library</span></div>
+            <div class="field-label lbl-v-dim">VOICE</div>
+            <select id="voice-id-select">
+              <option value="EXAVITQu4vr4xnSDxMaL">Sarah — Mature, Reassuring, Confident</option>
+              <option value="hpp4J3VqNfWAUOO0d1Us">Bella — Professional, Bright, Warm</option>
+              <option value="XrExE9yKIg1WjnnlVkGX">Matilda — Knowledgable, Professional</option>
+              <option value="Xb7hH8MSUJpSbSDYk0k2">Alice — Clear, Engaging Educator</option>
+              <option value="cgSgspJ2msm6clMCkdW9">Jessica — Playful, Bright, Warm</option>
+              <option value="pFZP5JQG7iQjIQuC4Bku">Lily — Velvety Actress</option>
+              <option value="FGY2WhTYpPnrIDTdsKH5">Laura — Enthusiast, Quirky</option>
+            </select>
+            <div class="field-hint">More voices: <span class="lnk" id="elevenlabs-voices-link">elevenlabs.io/voice-library</span></div>
+          </div>
+        </div>
+
+        <!-- Phase 5 — Web search / scrape / browser / narration -->
+        <div class="section section-v">
+          <div class="section-tag tag-v">WEB SEARCH</div>
+
+          <div class="field">
+            <div class="field-label lbl-v-dim">PROVIDER</div>
+            <select id="websearch-provider-select">
+              <option value="tavily">Tavily — 1000/mo free, no card required (recommended)</option>
+              <option value="brave">Brave Search — 2000/mo free (requires card)</option>
+            </select>
+            <div class="field-hint">Used for "what's happening with…" / "look up…" voice queries.</div>
+          </div>
+
+          <div class="field" id="tavily-key-field">
+            <div class="field-label lbl-v-dim">TAVILY API KEY</div>
+            <div class="input-row">
+              <input type="password" id="tavily-key-input" placeholder="tvly-..." autocomplete="off" spellcheck="false"/>
+              <button id="toggle-tavily-visibility" class="icon-btn" title="Toggle visibility" type="button">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                  <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>
+                </svg>
+              </button>
+            </div>
+            <div class="field-hint"><span class="lnk" id="tavily-link">app.tavily.com/sign-in</span></div>
+          </div>
+
+          <div class="field hidden" id="brave-key-field">
+            <div class="field-label lbl-v-dim">BRAVE API KEY</div>
+            <div class="input-row">
+              <input type="password" id="brave-key-input" placeholder="BSA..." autocomplete="off" spellcheck="false"/>
+              <button id="toggle-brave-visibility" class="icon-btn" title="Toggle visibility" type="button">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                  <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>
+                </svg>
+              </button>
+            </div>
+            <div class="field-hint"><span class="lnk" id="brave-link">api-dashboard.search.brave.com/app/keys</span></div>
+          </div>
+        </div>
+
+        <div class="section section-v">
+          <div class="section-tag tag-v">DEEP SCRAPE (OPTIONAL)</div>
+
+          <div class="field">
+            <div class="field-label lbl-v-dim">APIFY TOKEN</div>
+            <div class="input-row">
+              <input type="password" id="apify-token-input" placeholder="apify_api_..." autocomplete="off" spellcheck="false"/>
+              <button id="toggle-apify-visibility" class="icon-btn" title="Toggle visibility" type="button">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                  <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>
+                </svg>
+              </button>
+            </div>
+            <div class="field-hint"><span class="lnk" id="apify-link">console.apify.com/account/integrations</span></div>
+            <div class="field-hint">Optional — used only for deep page scraping (Reddit threads, anti-bot pages).</div>
+          </div>
+        </div>
+
+        <div class="section section-v">
+          <div class="section-tag tag-v">BROWSER &amp; PIPELINE</div>
+
+          <div class="field">
+            <label class="toggle-wrap" for="chrome-autolaunch-checkbox">
+              <input type="checkbox" id="chrome-autolaunch-checkbox" class="t-input"/>
+              <span class="t-track t-v"><span class="t-thumb t-thumb-v"></span></span>
+              <span class="t-label lbl-v">AUTO-LAUNCH CHROME WITH DEBUGGING</span>
+            </label>
+            <div class="field-hint">Lets Jarvis attach to Chrome via CDP for browser tools. Spawns a separate Jarvis-controlled Chrome profile in ~/.jarvis-chrome.</div>
+          </div>
+
+          <div class="field">
+            <label class="toggle-wrap" for="narration-enabled-checkbox">
+              <input type="checkbox" id="narration-enabled-checkbox" class="t-input"/>
+              <span class="t-track t-v"><span class="t-thumb t-thumb-v"></span></span>
+              <span class="t-label lbl-v">PLAN-STEP NARRATION</span>
+            </label>
+            <div class="field-hint">Speaks "Searching the web…" / "Reading the page…" between multi-step plan actions.</div>
+          </div>
+
+          <div class="field">
+            <label class="toggle-wrap" for="vision-enabled-checkbox">
+              <input type="checkbox" id="vision-enabled-checkbox" class="t-input"/>
+              <span class="t-track t-v"><span class="t-thumb t-thumb-v"></span></span>
+              <span class="t-label lbl-v">VISION FALLBACK (GEMINI)</span>
+            </label>
+            <div class="field-hint">When UIA/CDP can't see an element, takes a screenshot and asks Gemini Vision. Uses your Gemini key.</div>
           </div>
         </div>
       </div>

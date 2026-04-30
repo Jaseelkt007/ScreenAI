@@ -20,6 +20,8 @@ const settings = require('../settings');
 let _window = null;        // { processName, hwnd, kind, setAt }
 let _file   = null;        // { name, path, setAt }
 let _candidates = null;    // { candidates, classifiedResult, setAt }
+let _lastAction = null;    // M4.8 — { intent, params, result, transcript, needsConfirm, setAt }
+let _activeResultSet = null; // M5.4 — { kind, source, cards, setAt }
 
 // ─── TTL helper ───────────────────────────────────────────────────────────────
 
@@ -69,6 +71,35 @@ function setCandidates(candidates, classifiedResult) {
   _candidates = { candidates, classifiedResult, setAt: Date.now() };
 }
 
+/**
+ * M4.8 — Record the most recent successfully-dispatched action so the user can
+ * say "do that again" or "undo that". Meta intents (system.repeat, system.undo,
+ * system.cancel, system.select, system.unsupported) MUST be filtered out by the
+ * caller — recording them here would create loops.
+ *
+ * @param {object} entry
+ * @param {string} entry.intent
+ * @param {object} entry.params
+ * @param {object} [entry.result]   — abbreviated tool result for context
+ * @param {string} [entry.transcript]
+ * @param {boolean}[entry.needsConfirm]
+ */
+function setLastAction(entry) {
+  if (!entry || !entry.intent) return;
+  _lastAction = {
+    intent:       entry.intent,
+    params:       entry.params ? { ...entry.params } : {},
+    result:       entry.result ? {
+      ok:     !!entry.result.ok,
+      action: entry.result.action || '',
+      error:  entry.result.error  || null,
+    } : null,
+    transcript:   entry.transcript || '',
+    needsConfirm: !!entry.needsConfirm,
+    setAt:        Date.now(),
+  };
+}
+
 // ─── Getters ──────────────────────────────────────────────────────────────────
 
 /**
@@ -98,6 +129,62 @@ function getCandidates() {
   return { candidates, classifiedResult };
 }
 
+/**
+ * M4.8 — Return the most recent recorded action, or null if expired.
+ * @returns {{ intent, params, result, transcript, needsConfirm } | null}
+ */
+function getLastAction() {
+  if (!_fresh(_lastAction)) return null;
+  const { intent, params, result, transcript, needsConfirm } = _lastAction;
+  return { intent, params: { ...params }, result, transcript, needsConfirm };
+}
+
+// ─── M5.4 — Active result set ─────────────────────────────────────────────────
+
+/**
+ * Store the most recent voice-pickable result list (search results, files,
+ * tabs) so a follow-up "open the second one" can target it without a fresh
+ * disambiguation. Only one active set is held at a time.
+ *
+ * @param {object} entry
+ * @param {'web'|'tabs'|'files'} entry.kind
+ * @param {string} entry.source
+ * @param {Array<{index, title, url?, path?, tabId?}>} entry.cards
+ */
+function setActiveResultSet(entry) {
+  if (!entry || !Array.isArray(entry.cards) || entry.cards.length === 0) {
+    _activeResultSet = null;
+    return;
+  }
+  _activeResultSet = {
+    kind:   entry.kind || 'web',
+    source: entry.source || '',
+    cards:  entry.cards.slice(0, 8),
+    setAt:  Date.now(),
+  };
+}
+
+/**
+ * @returns {{ kind, source, cards } | null}
+ */
+function getActiveResultSet() {
+  if (!_activeResultSet) return null;
+  // Result panels expire on jarvisResultPanelTimeoutMs, defaulting to 30s — we
+  // reuse the standard TTL helper since the value is bounded and reasonable.
+  const settings = require('../settings');
+  const panelTtl = Number(settings.getSetting('jarvisResultPanelTimeoutMs', 30000)) || 30000;
+  if (panelTtl > 0 && (Date.now() - _activeResultSet.setAt) >= panelTtl) {
+    _activeResultSet = null;
+    return null;
+  }
+  const { kind, source, cards } = _activeResultSet;
+  return { kind, source, cards: cards.map((c) => ({ ...c })) };
+}
+
+function clearActiveResultSet() {
+  _activeResultSet = null;
+}
+
 // ─── Lifecycle ────────────────────────────────────────────────────────────────
 
 /** Remove only the disambiguation candidates (after resolution or cancel). */
@@ -110,6 +197,8 @@ function clear() {
   _window     = null;
   _file       = null;
   _candidates = null;
+  _lastAction = null;
+  _activeResultSet = null;
 }
 
 // ─── Diagnostics ─────────────────────────────────────────────────────────────
@@ -124,6 +213,8 @@ function snapshot() {
     window:       _window     ? { ..._window,     ttlRemaining: Math.max(0, _ttlMs() - (now - _window.setAt))     } : null,
     file:         _file       ? { ..._file,        ttlRemaining: Math.max(0, _ttlMs() - (now - _file.setAt))       } : null,
     candidates:   _candidates ? { ..._candidates,  ttlRemaining: Math.max(0, _ttlMs() - (now - _candidates.setAt)) } : null,
+    lastAction:   _lastAction ? { ..._lastAction,  ttlRemaining: Math.max(0, _ttlMs() - (now - _lastAction.setAt)) } : null,
+    activeResults: _activeResultSet ? { ..._activeResultSet, count: _activeResultSet.cards.length } : null,
     ttlMs:        _ttlMs(),
   };
 }
@@ -134,10 +225,15 @@ module.exports = {
   setWindowTarget,
   setFileTarget,
   setCandidates,
+  setLastAction,
+  setActiveResultSet,
   getWindowTarget,
   getFileTarget,
   getCandidates,
+  getLastAction,
+  getActiveResultSet,
   clearCandidates,
+  clearActiveResultSet,
   clear,
   snapshot,
 };

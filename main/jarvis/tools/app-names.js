@@ -22,6 +22,8 @@ const APP_NAMES = {
   'code':      { processName: 'Code',              exe: 'Code.exe' },
   'word':      { processName: 'WINWORD',           exe: 'WINWORD.EXE' },
   'excel':     { processName: 'EXCEL',             exe: 'EXCEL.EXE' },
+  'outlook':   { processName: 'OUTLOOK',           exe: 'OUTLOOK.EXE' },
+  'powerpoint':{ processName: 'POWERPNT',          exe: 'POWERPNT.EXE' },
   'explorer':  { processName: 'explorer',          exe: 'explorer.exe' },
   'terminal':  { processName: 'WindowsTerminal',   exe: 'wt.exe' },
   'slack':     { processName: 'slack',             exe: 'slack.exe' },
@@ -44,6 +46,8 @@ const APP_NAMES = {
   'task manager':    { processName: 'Taskmgr',         exe: 'Taskmgr.exe' },
   'windows terminal': { processName: 'WindowsTerminal', exe: 'wt.exe' },
   'powerpoint':      { processName: 'POWERPNT',        exe: 'POWERPNT.EXE' },
+  // Phase 4 QA fixes
+  'windsurf':        { processName: 'Windsurf',         exe: 'Windsurf.exe' },
 };
 
 /** Set of known browser process names (lowercase). Used by isBrowserFocused(). */

@@ -31,10 +31,26 @@ function getSettingsPath() {
 
 // ─── Read ──────────────────────────────────────────────────────────────────
 
+// ElevenLabs voice IDs that should be auto-bumped to the current default.
+// Includes the previous male defaults (Daniel, George) and a deprecated
+// female ID (Rachel — no longer in the premade roster, returns 404).
+const LEGACY_VOICE_IDS = new Set([
+  'onwK4e9ZLuTAKqWW03F9', // Daniel — male
+  'JBFqnCBsd6RMkjVDRZzb', // George — male
+  '21m00Tcm4TlvDq8ikWAM', // Rachel — deprecated, 404s on TTS
+]);
+// Sarah — female, "Mature, Reassuring, Confident". Verified against the live
+// /v1/voices premade list.
+const DEFAULT_VOICE_ID = 'EXAVITQu4vr4xnSDxMaL';
+
 function loadSettings() {
   try {
     const raw = fs.readFileSync(getSettingsPath(), 'utf8');
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (LEGACY_VOICE_IDS.has(parsed.voiceId)) {
+      parsed.voiceId = DEFAULT_VOICE_ID;
+    }
+    return parsed;
   } catch {
     // File doesn't exist yet (first run) or is corrupt — return defaults.
     return getDefaults();
@@ -58,7 +74,7 @@ function getDefaults() {
     elevenlabsApiKey:    '',
     voiceEnabled:        false,
     voiceHotkey:         '',
-    voiceId:             'onwK4e9ZLuTAKqWW03F9', // ElevenLabs "Daniel" — deep, authoritative
+    voiceId:             DEFAULT_VOICE_ID, // ElevenLabs "Sarah" — mature, reassuring female
     maxVoiceDurationMs:  20000,
     preferredSttLanguage: '',
     // Agent Subsystem
@@ -89,6 +105,52 @@ function getDefaults() {
     jarvisTraceEnabled:    false,
     jarvisTraceDir:        '',           // '' → ~/Documents/Jarvis/traces
     jarvisTraceMaxFiles:   200,
+    // M4.4.1 — controls trace output format when jarvisTraceEnabled is true.
+    // 'off'     — never write (overrides jarvisTraceEnabled)
+    // 'summary' — single-line minimal JSON per run (id, intent, path, ok, total)
+    // 'full'    — full pretty-printed TraceRecord (default)
+    jarvisTraceLevel:      'full',
+    // M4.5 — Tool-Calling Agent layer (LLM function-calling fallback)
+    jarvisAgentEnabled:    true,
+    jarvisAgentProvider:   'gemini-2.5-flash',
+    jarvisAgentMaxSteps:   3,
+    jarvisAgentTimeoutMs:  4000,
+    // M4.7 — Streaming pipeline (ack TTS, cancellation, speculative classify)
+    jarvisStreamingEnabled: true,
+    // Off by default: the ack ("Opening notepad…") immediately followed by the
+    // result ("Opened notepad.") felt redundant. Flip to true to bring the
+    // pre-warm-the-ears ack back.
+    jarvisAckTtsEnabled:    false,
+    // ── Phase 5 ──────────────────────────────────────────────────────────────
+    // M5.0 — Planner / Executor (replaces the M4.5 3-call agent for misses)
+    jarvisPlannerEnabled:   true,
+    jarvisPlanMaxSteps:     15,
+    jarvisPlanTimeoutMs:    30000,
+    jarvisPlanReplanMax:    1,
+    // M5.1 — Browser tools (Playwright + CDP attach to user's Chrome)
+    jarvisChromeDebugPort:  9222,
+    jarvisChromeAutoLaunch: true,
+    jarvisChromePath:       '',
+    // M5.2 — Knowledge tools
+    // jarvisWebSearchProvider: 'tavily' | 'brave'
+    //   tavily — 1000 queries/month free, no credit card required (default)
+    //   brave  — 2000 queries/month free but requires a card on signup
+    jarvisWebSearchProvider: 'tavily',
+    jarvisTavilyApiKey:      '',
+    jarvisBraveApiKey:       '',
+    jarvisApifyToken:        '',
+    jarvisApifyActor:        'apify/web-scraper',
+    jarvisVisionEnabled:     true,
+    jarvisVisionModel:       'gemini-2.5-flash',
+    jarvisWebSearchPerMinute: 10,
+    jarvisWebScrapePerMinute: 3,
+    // M5.3 — Live narration & plan-level cancellation
+    jarvisNarrationEnabled:    true,
+    jarvisNarrationVolume:     0.6,
+    jarvisVoiceCancelEnabled:  true,
+    // M5.4 — Result panel HUD
+    jarvisResultPanelEnabled:    true,
+    jarvisResultPanelTimeoutMs:  30000,
   };
 }
 

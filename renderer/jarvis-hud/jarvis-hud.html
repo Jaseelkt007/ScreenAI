@@ -49,9 +49,33 @@
     <ol id="disambiguate-list"></ol>
   </div>
 
+  <!-- ── Context badge (M4.5) — shows active file/window target ── -->
+  <div id="context-badge" class="hidden">
+    <span id="context-badge-icon">◈</span>
+    <span id="context-badge-text"></span>
+  </div>
+
   <!-- ── Result / error bar ── -->
   <div id="result-bar" class="hidden">
     <span id="result-text"></span>
+  </div>
+
+  <!-- ── Plan progress (M5.0) — shows "Step 2/5: Searching the web…" -->
+  <div id="plan-progress" class="hidden">
+    <div id="plan-progress-row">
+      <span id="plan-progress-step">Step 1/1</span>
+      <span id="plan-progress-narration">Working…</span>
+    </div>
+    <div id="plan-progress-bar"><div id="plan-progress-fill"></div></div>
+  </div>
+
+  <!-- ── Result panel (M5.4) — voice-pickable cards -->
+  <div id="result-panel" class="hidden">
+    <div id="result-panel-header">
+      <span id="result-panel-title">Results</span>
+      <span id="result-panel-hint">Say a number, or press 1–9</span>
+    </div>
+    <ol id="result-panel-list"></ol>
   </div>
 
   <script src="jarvis-hud.js"></script>
