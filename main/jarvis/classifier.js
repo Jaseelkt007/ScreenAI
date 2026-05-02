@@ -1072,36 +1072,90 @@ function extractExtension(t) {
   return m ? m[1] : null;
 }
 
-/**
- * Extract the search query from a file.find command.
- * Strips trigger verbs, articles, possessives, and trailing location hints.
- * Preserves the full remainder (multi-word queries flow into findFiles
- * where they are tokenized and scored).
- */
-function extractFindQuery(t) {
-  let s = t
-    .replace(/\b(find|locate|search\s+for|look\s+for|where\s+is|where'?s)\b\s*/i, '')
-    .replace(/^\s*(my|the|a|an)\s+/i, '')
-    .replace(/\s+\b(in|on|at|from|inside)\s+(documents|desktop|downloads|jarvis)\b.*$/i, '')
-    .replace(/\s+\b(files?|documents?|docs?)\b$/i, '')
+// ── Noun-phrase extraction for find/open intents ────────────────────────────
+// Conversational chrome that wraps the actual search target. Stripped from
+// either end so what's left is just the noun phrase.
+const LEADING_CHROME_RE  = /^\s*(?:can|could|would|will|do|does|did|please|just|also|kindly|so|then|now|hey|ok|okay|alright|actually)\s+/i;
+const LEADING_PRONOUN_RE = /^\s*(?:you|i|me|we|us|i'?d\s+like\s+to|i\s+want\s+to|i\s+need\s+to)\s+/i;
+const LEADING_DETER_RE   = /^\s*(?:the|a|an|my|your|our|some|that|this|those|these|for\s+me|me)\s+/i;
+
+function stripLeadingChrome(s) {
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(LEADING_CHROME_RE, '');
+    s = s.replace(LEADING_PRONOUN_RE, '');
+    s = s.replace(LEADING_DETER_RE, '');
+  } while (s !== prev);
+  return s.trim();
+}
+
+function stripTrailingChrome(s) {
+  return s
+    .replace(/[?!.]+\s*$/g, '')
+    .replace(/\s+(?:please|now|for\s+me|sir|thanks?|thank\s+you|if\s+you\s+can)$/i, '')
     .trim();
-  return s || null;
 }
 
 /**
- * Extract the spoken name for a file.open command with a document alias.
- * Returns the full remainder so phrases like "open my resume Jaseel" keep
- * the "jaseel" token for findFiles ranking. Single-word aliases still
- * collapse to just the alias ("open my CV" → "cv").
+ * Extract the search-target noun phrase from a transcript.
+ *
+ * The query is the noun phrase the user is searching for — not "everything
+ * minus the verb". This means stopwords like "can"/"you" never appear in
+ * the result because they're peeled at the boundaries, before tokenization.
+ *
+ *   "Can you find my CV and just open it?"  → "cv"
+ *   "Find me the latest report in documents" → "latest report"
+ *   "Where's my budget spreadsheet"          → "budget spreadsheet"
+ *   "Look for cv-phase4"                     → "cv-phase4"
+ *
+ * @param {string} t              — full transcript
+ * @param {RegExp} verbRegex      — verb pattern to strip (must have /gi flags)
+ */
+function extractSearchTarget(t, verbRegex) {
+  if (!t) return null;
+  let s = String(t).toLowerCase().trim();
+
+  // Peel leading conversational chrome ("can you", "please", "could you").
+  s = stripLeadingChrome(s);
+
+  // Strip the search verb itself.
+  s = s.replace(verbRegex, ' ');
+
+  // Cut on conjunctions / trailing clauses — the second action ("and just
+  // open it") and any commas/punctuation drop everything after them.
+  s = s.split(/\s+(?:and|then|but|or|so|after\s+that|if\s+you\s+can)\s+|[,;?!]\s*/i)[0] || '';
+
+  // Strip trailing location hint and bare file-noun cruft.
+  s = s.replace(/\s+\b(?:in|on|at|from|inside)\s+(?:documents|desktop|downloads|jarvis)\b.*$/i, '');
+  s = s.replace(/\s+\b(?:files?|documents?|docs?)\b$/i, '');
+
+  // Re-peel leading chrome — the verb strip may have left "my" / "the" exposed.
+  s = stripLeadingChrome(s);
+
+  s = stripTrailingChrome(s);
+
+  return s.trim() || null;
+}
+
+const FIND_VERBS_RE = /\b(?:find|locate|search\s+for|look\s+for|where\s+is|where'?s)\b/gi;
+const OPEN_VERBS_RE = /\b(?:open|show|load|display|launch|read)\b/gi;
+
+/**
+ * Extract the search target from a file.find command. Returns the noun
+ * phrase only — never conversational filler like "can"/"you"/"please".
+ */
+function extractFindQuery(t) {
+  return extractSearchTarget(t, FIND_VERBS_RE);
+}
+
+/**
+ * Extract the search target from a file.open command. Same noun-phrase
+ * discipline as extractFindQuery; preserves multi-word names like
+ * "resume Jaseel" so findFiles can rank them.
  */
 function extractDocumentAlias(t) {
-  let s = t.toLowerCase()
-    .replace(/\b(open|show|load|display|launch|read)\b\s*/i, '')
-    .replace(/^\s*(my|the|a|an)\s+/i, '')
-    .replace(/\s+\b(in|on|at|from|inside)\s+(documents|desktop|downloads|jarvis)\b.*$/i, '')
-    .replace(/\s+(please|now|for\s+me)$/i, '')
-    .trim();
-  return s || null;
+  return extractSearchTarget(t, OPEN_VERBS_RE);
 }
 
 // ─── M3.4 extraction helpers ─────────────────────────────────────────────────

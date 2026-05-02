@@ -2020,29 +2020,49 @@ async function runM33FileSearchTests() {
     assert.deepEqual(r, ['jaseel']);
   });
 
-  await test('scoreFile: exact token match scores 10', () => {
-    const s = scoreFile('resume_Jaseel.pdf', ['resume'], null);
-    assert.ok(s >= 10, `score: ${s}`);
+  await test('scoreFile: exact token match → strong tier, score 10', () => {
+    const r = scoreFile('resume_Jaseel.pdf', '/home/u/Desktop/resume_Jaseel.pdf', ['resume'], null);
+    assert.ok(r.score >= 10, `score: ${r.score}`);
+    assert.equal(r.tier, 'strong');
   });
 
-  await test('scoreFile: two exact tokens + matching ext → 22', () => {
-    const s = scoreFile('resume_Jaseel.pdf', ['resume', 'jaseel'], 'pdf');
-    assert.equal(s, 22);
+  await test('scoreFile: two exact tokens + matching ext → score 22, strong', () => {
+    const r = scoreFile('resume_Jaseel.pdf', '/home/u/Desktop/resume_Jaseel.pdf', ['resume', 'jaseel'], 'pdf');
+    assert.equal(r.score, 22);
+    assert.equal(r.tier, 'strong');
   });
 
-  await test('scoreFile: extension mismatch → 0', () => {
-    const s = scoreFile('resume_Jaseel.pdf', ['resume'], 'docx');
-    assert.equal(s, 0);
+  await test('scoreFile: extension mismatch → 0, none', () => {
+    const r = scoreFile('resume_Jaseel.pdf', '/home/u/Desktop/resume_Jaseel.pdf', ['resume'], 'docx');
+    assert.equal(r.score, 0);
+    assert.equal(r.tier, 'none');
   });
 
-  await test('scoreFile: substring-only match scores 5', () => {
-    const s = scoreFile('myresumefile.pdf', ['resume'], null);
-    assert.equal(s, 5);
+  await test('scoreFile: parent-path match → medium tier (no name token)', () => {
+    const r = scoreFile('notes.txt', '/home/u/Documents/CV/notes.txt', ['cv'], null);
+    assert.equal(r.tier, 'medium');
+    assert.ok(r.score >= 5, `score: ${r.score}`);
   });
 
-  await test('scoreFile: no match → 0', () => {
-    const s = scoreFile('notes.txt', ['resume'], null);
-    assert.equal(s, 0);
+  await test('scoreFile: substring without word boundary → no match (was the bug)', () => {
+    const r = scoreFile('myresumefile.pdf', '/home/u/Desktop/myresumefile.pdf', ['resume'], null);
+    assert.equal(r.score, 0);
+    assert.equal(r.tier, 'none');
+  });
+
+  await test('scoreFile: no match → 0, none', () => {
+    const r = scoreFile('notes.txt', '/home/u/Desktop/notes.txt', ['resume'], null);
+    assert.equal(r.score, 0);
+    assert.equal(r.tier, 'none');
+  });
+
+  await test('scoreFile: stopword leak case — "can"/"you" no longer match unrelated files', () => {
+    // Regression test for the Apr 2026 bug: "Can you find my CV" used to
+    // match files via substring "can"/"you" inside other words.
+    const r1 = scoreFile('first regression.txt', '/home/u/Desktop/first regression.txt', ['can', 'you'], null);
+    assert.equal(r1.score, 0);
+    const r2 = scoreFile('vacancy_notes.txt', '/home/u/Desktop/vacancy_notes.txt', ['can'], null);
+    assert.equal(r2.score, 0);
   });
 
   // ── End-to-end findFiles with mocked PowerShell ──

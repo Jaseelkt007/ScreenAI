@@ -274,11 +274,19 @@ const KNOWN_EXTENSIONS = new Set([
   'png','jpg','jpeg','gif','mp4','mov','zip',
 ]);
 
+// Belt-and-suspenders stopword list. The classifier's noun-phrase extractor
+// (extractFindQuery) is the primary defense against conversational filler;
+// this list catches anything that slipped through, plus handles programmatic
+// callers that bypass the classifier.
 const QUERY_STOP_WORDS = new Set([
-  'a','an','the','my','your','this','that',
+  'a','an','the','my','your','our','this','that','those','these',
   'file','files','document','documents','doc','docs',
-  'in','on','at','with','for','to','of','from',
-  'please','now',
+  'in','on','at','with','for','to','of','from','about',
+  'please','now','just','also','kindly',
+  'can','could','would','will','do','does','did',
+  'you','i','me','we','us','it',
+  'find','locate','search','look','where','open','show',
+  'is','are','was','were','be','been',
 ]);
 
 /**
@@ -331,38 +339,81 @@ function expandAliases(tokens) {
   return out;
 }
 
+// Match tiers — used to gate "found a real match" vs "found something weak".
+// A file qualifies as a real match only if at least one token hits Strong
+// or Medium. Weak-only matches are filtered out.
+const TIER_STRONG = 'strong';   // whole-word match in filename stem
+const TIER_MEDIUM = 'medium';   // whole-word match in parent path
+const TIER_WEAK   = 'weak';     // word-boundary substring in stem
+const TIER_NONE   = 'none';
+
+const STRONG_SCORE = 10;
+const MEDIUM_SCORE = 5;
+const WEAK_SCORE   = 1;
+const EXT_BONUS    = 2;
+
+const TIER_RANK = { [TIER_STRONG]: 3, [TIER_MEDIUM]: 2, [TIER_WEAK]: 1, [TIER_NONE]: 0 };
+
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * Score a filename against expanded query tokens + optional extension.
+ * Returns both a numeric score (for ranking) and a tier (for quality gating).
  *
- *   exact token in filename stem    → +10
- *   substring of filename (lower)   → +5
- *   matching extension              → +2 bonus
- *   specified extension mismatch    → rejected (score 0)
+ * Tiers — only a file's BEST tier across all tokens counts as its quality:
+ *   Strong: whole-word match in filename stem ("cv" matches "cv-phase4.txt")
+ *   Medium: whole-word match in parent path  ("cv" matches "/Documents/CV/...")
+ *   Weak:   word-boundary substring in stem  (rare; e.g. multi-word stems)
+ *
+ * Rejected (score 0, TIER_NONE) when:
+ *   - no tokens hit any tier
+ *   - extension was specified and does not match
  */
-function scoreFile(fileName, queryTokens, extension) {
-  if (!fileName) return 0;
-  const lower  = fileName.toLowerCase();
-  const dot    = lower.lastIndexOf('.');
-  const ext    = dot >= 0 ? lower.slice(dot + 1) : '';
-  const stem   = dot >= 0 ? lower.slice(0, dot) : lower;
+function scoreFile(fileName, fullPath, queryTokens, extension) {
+  if (!fileName) return { score: 0, tier: TIER_NONE };
+  const lowerName  = fileName.toLowerCase();
+  const dot        = lowerName.lastIndexOf('.');
+  const ext        = dot >= 0 ? lowerName.slice(dot + 1) : '';
+  const stem       = dot >= 0 ? lowerName.slice(0, dot) : lowerName;
 
-  if (extension && ext !== extension.toLowerCase()) return 0;
+  if (extension && ext !== extension.toLowerCase()) return { score: 0, tier: TIER_NONE };
 
   const stemTokens = stem.split(/[\s_.\-]+/).filter(Boolean);
   const stemSet    = new Set(stemTokens);
 
+  // Parent-path tokens (everything except the filename itself).
+  const parentLower = fullPath
+    ? String(fullPath).toLowerCase().slice(0, -fileName.length)
+    : '';
+  const pathTokens = new Set(parentLower.split(/[\s_.\-/\\]+/).filter(Boolean));
+
   let score = 0;
+  let tier  = TIER_NONE;
+  const promote = (next) => {
+    if (TIER_RANK[next] > TIER_RANK[tier]) tier = next;
+  };
+
   for (const qt of queryTokens) {
     if (!qt) continue;
     if (stemSet.has(qt)) {
-      score += 10;
-    } else if (lower.includes(qt)) {
-      score += 5;
+      score += STRONG_SCORE;
+      promote(TIER_STRONG);
+    } else if (pathTokens.has(qt)) {
+      score += MEDIUM_SCORE;
+      promote(TIER_MEDIUM);
+    } else {
+      const wbRe = new RegExp(`(?:^|[\\s_.\\-])${escapeRegex(qt)}(?:$|[\\s_.\\-])`);
+      if (wbRe.test(stem)) {
+        score += WEAK_SCORE;
+        promote(TIER_WEAK);
+      }
     }
   }
 
-  if (extension && ext === extension.toLowerCase()) score += 2;
-  return score;
+  if (extension && ext === extension.toLowerCase()) score += EXT_BONUS;
+  return { score, tier };
 }
 
 /**
@@ -448,7 +499,7 @@ $results | ConvertTo-Json -Depth 1
   console.log('[findFiles] allFiles count:', allFiles.length, '| samples:', allFiles.slice(0, 5).map(f => f.Name));
 
   // Score candidates. If the user specified only an extension, use every
-  // matching-extension file (score=10) — tokens are empty so scoreFile returns 0.
+  // matching-extension file (treat as Strong since the user was explicit).
   let scored;
   if (baseTokens.length === 0 && finalExt) {
     scored = allFiles
@@ -458,44 +509,77 @@ $results | ConvertTo-Json -Depth 1
         path:       item.FullName,
         sizeBytes:  item.Length || 0,
         modifiedAt: item.LastWriteTime,
-        score:      10,
+        score:      STRONG_SCORE + EXT_BONUS,
+        tier:       TIER_STRONG,
       }));
   } else {
     scored = allFiles
-      .map((item) => ({
-        name:       item.Name,
-        path:       item.FullName,
-        sizeBytes:  item.Length || 0,
-        modifiedAt: item.LastWriteTime,
-        score:      scoreFile(item.Name, expandedTokens, finalExt),
-      }))
+      .map((item) => {
+        const { score, tier } = scoreFile(item.Name, item.FullName, expandedTokens, finalExt);
+        return {
+          name:       item.Name,
+          path:       item.FullName,
+          sizeBytes:  item.Length || 0,
+          modifiedAt: item.LastWriteTime,
+          score,
+          tier,
+        };
+      })
       .filter((x) => x.score > 0);
   }
 
-  scored.sort((a, b) => {
+  // Quality gate: weak-only matches don't count as real results — they're
+  // substring flukes (e.g. "can" matching inside another word). The query
+  // already lost conversational filler at extraction time; if nothing
+  // surfaces a Strong/Medium hit now, there is no real match to report.
+  const realMatches = scored.filter((x) => x.tier === TIER_STRONG || x.tier === TIER_MEDIUM);
+  const weakSuggestions = scored.filter((x) => x.tier === TIER_WEAK);
+
+  const sortByScoreThenRecency = (a, b) => {
     if (b.score !== a.score) return b.score - a.score;
     return String(b.modifiedAt || '').localeCompare(String(a.modifiedAt || ''));
-  });
+  };
+  realMatches.sort(sortByScoreThenRecency);
+  weakSuggestions.sort(sortByScoreThenRecency);
 
-  const topMatches = scored.slice(0, 10).map(({ score, ...rest }) =>
-    _includeScores ? { ...rest, score } : rest
+  console.log(
+    '[findFiles] real matches:', realMatches.length,
+    '|', realMatches.slice(0, 5).map(m => `${m.name}(${m.tier},${m.score})`).join(', '),
+    '| weak only:', weakSuggestions.length,
+    '|', weakSuggestions.slice(0, 3).map(m => m.name).join(', '),
   );
+
+  const stripInternal = (item) => {
+    const { score, tier, ...rest } = item;
+    return _includeScores ? { ...rest, score, tier } : rest;
+  };
+  const topMatches = realMatches.slice(0, 10).map(stripInternal);
   const searchKey  = query || extension;
 
   if (topMatches.length === 0) {
+    // No real matches. If we have weak suggestions, surface them so the
+    // user can confirm — but as a *question*, not as an answer.
+    if (weakSuggestions.length > 0) {
+      const top = weakSuggestions[0];
+      const errMsg = `I couldn't find a clear match for "${searchKey}". Closest was "${top.name}" — did you mean that?`;
+      console.log('[findFiles] result: NO_REAL_MATCH (weak suggestion) →', errMsg);
+      return { ok: false, error: errMsg, action: '' };
+    }
     const extraAliases = expandedTokens.filter((t) => !baseTokens.includes(t));
     const aliasHint    = extraAliases.length ? ` (also tried: ${extraAliases.join(', ')})` : '';
     const tokenHint    = baseTokens.length ? ` using tokens [${baseTokens.join(', ')}]${aliasHint}` : aliasHint;
-    return {
-      ok:     false,
-      error:  `No files matching "${searchKey}" found in ${searchedIn}${tokenHint}.`,
-      action: '',
-    };
+    const errMsg = `No files matching "${searchKey}" found in ${searchedIn}${tokenHint}.`;
+    console.log('[findFiles] result: ZERO_MATCHES →', errMsg);
+    return { ok: false, error: errMsg, action: '' };
   }
 
+  // Honest narration — speak the file when there's exactly one, or speak
+  // a count only when there are several real matches. Never inflate a
+  // single hit into "found N files".
   const actionText = topMatches.length === 1
     ? `Found ${topMatches[0].name} in ${friendlyDir(path.dirname(topMatches[0].path))}.`
     : `Found ${topMatches.length} files matching "${searchKey}". Showing the most recent.`;
+  console.log('[findFiles] result: OK →', actionText);
 
   return {
     ok:   true,

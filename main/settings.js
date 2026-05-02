@@ -70,17 +70,10 @@ function getDefaults() {
     customHotkey:        '',
     startWithOS:         true,
     firstRun:            true,
-    // Voice Guide (Phase 1)
+    // ElevenLabs (used by Jarvis STT/TTS)
     elevenlabsApiKey:    '',
-    voiceEnabled:        false,
-    voiceHotkey:         '',
     voiceId:             DEFAULT_VOICE_ID, // ElevenLabs "Sarah" — mature, reassuring female
-    maxVoiceDurationMs:  20000,
     preferredSttLanguage: '',
-    // Agent Subsystem
-    agentEnabled:        false,
-    agentBackend:        'codex', // 'codex' | 'vibe'
-    mistralApiKey:       '',
     // Jarvis pipeline
     jarvisEnabled:       true,
     jarvisHotkey:        '',     // custom override; default is F9 / Shift+Command+J
